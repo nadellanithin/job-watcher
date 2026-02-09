@@ -1,0 +1,25 @@
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+  background: transparent;
+  color: inherit;
+}
+
+/* Focus styles are handled in Layout via box-shadows */
+:focus {
+  outline: none;
+}

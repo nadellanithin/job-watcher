@@ -1,0 +1,44 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# Node / Vite
+node_modules/
+dist/
+build/
+.vite/
+
+# Logs
+*.log
+
+# DB / runtime outputs
+*.db
+*.sqlite
+*.sqlite3
+backend/jobs.json
+backend/new_jobs.json
+backend/*.csv
+backend/output/
+outputs/
+data/
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+
+# Playwright
+playwright/.cache/
