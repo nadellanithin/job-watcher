@@ -1,0 +1,4 @@
+/* Remove Vite starter styles that constrained layout and added padding */
+#root {
+  height: 100%;
+}

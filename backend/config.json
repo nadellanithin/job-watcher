@@ -1,0 +1,29 @@
+{
+  "role_keywords": ["python", "backend", "data engineer"],
+  "include_keywords": [],
+  "exclude_keywords": ["intern", "principal", "staff"],
+
+  "visa_restriction_phrases": [
+    "no visa sponsorship",
+    "sponsorship not available",
+    "will not sponsor",
+    "must be authorized to work in the u.s. without sponsorship",
+    "us citizens only",
+    "u.s. citizen required",
+    "security clearance",
+    "itar",
+    "export control"
+  ],
+
+  "preferred_states": ["TX", "CA", "WA"],
+  "allow_remote_us": true,
+  "work_mode_preference": "any",
+  "refresh_interval_minutes": 15,
+
+  "uscis_h1b_years": [2025, 2024, 2023, 2022, 2021, 2020],
+  "uscis_h1b_cache_dir": "./.cache/uscis_h1b",
+
+  "sources": [
+    { "type": "greenhouse", "company_slug": "airbnb", "label": "Airbnb" }
+  ]
+}
