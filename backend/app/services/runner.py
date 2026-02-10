@@ -5,7 +5,7 @@ import hashlib
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 
-from app.services.dedupe import SqliteJobState
+from app.services.dedupe import SqliteJobState, build_dedupe_key
 from app.services.output_files import write_csv, write_json
 from app.services.fetchers.legacy_adapter import fetch_jobs_via_legacy
 
@@ -111,7 +111,47 @@ class RunnerService:
 
             config = build_legacy_config(settings, legacy_sources)
 
-            fetched_jobs, source_errors, h1b_errors, discovered_sources = fetch_jobs_via_legacy(config)
+            fetched_jobs, source_errors, h1b_errors, discovered_sources, audit_rows = fetch_jobs_via_legacy(config)
+
+            # === Apply deterministic per-job overrides (include/exclude) ===
+            # We apply overrides on the evaluated set (audit_rows) and derive the final kept list from that.
+            # This avoids any risk of breaking the legacy crawler/fetcher behavior.
+            audit_by_key = {}
+            dedupe_keys = []
+            for row in audit_rows:
+                dk = build_dedupe_key(row)
+                row["dedupe_key"] = dk
+                audit_by_key[dk] = row
+                dedupe_keys.append(dk)
+
+            overrides = {}
+            if dedupe_keys:
+                # chunk to stay under SQLite variable limits
+                chunk_size = 500
+                for i in range(0, len(dedupe_keys), chunk_size):
+                    chunk = dedupe_keys[i : i + chunk_size]
+                    qmarks = ",".join(["?"] * len(chunk))
+                    rows = self.con.execute(
+                        f"SELECT dedupe_key, action FROM job_overrides WHERE dedupe_key IN ({qmarks})",
+                        chunk,
+                    ).fetchall()
+                    for r in rows:
+                        overrides[r["dedupe_key"]] = (r["action"] or "").strip().lower()
+
+            for dk, row in audit_by_key.items():
+                action = overrides.get(dk)
+                if not action:
+                    continue
+                reasons = list(row.get("_audit_reasons") or [])
+                if action == "include":
+                    row["_audit_included"] = 1
+                    reasons.append("override:force_include")
+                elif action == "exclude":
+                    row["_audit_included"] = 0
+                    reasons.append("override:force_exclude")
+                row["_audit_reasons"] = reasons
+
+            final_kept = [r for r in audit_rows if int(r.get("_audit_included") or 0) == 1]
 
             # Persist ATS discoveries (optional upgrade path: career_url -> greenhouse/lever)
             if discovered_sources:
@@ -172,7 +212,7 @@ class RunnerService:
                 print("H1B load errors (first 3):", (h1b_errors or [])[:3])
 
             # Ensure required fields (safe defaults)
-            for j in fetched_jobs:
+            for j in final_kept:
                 j.setdefault("company_name", "")
                 j.setdefault("job_id", "")
                 j.setdefault("title", "")
@@ -186,11 +226,77 @@ class RunnerService:
                 j.setdefault("past_h1b_support", "no")
                 j.setdefault("work_mode", "unknown")
 
+            # Some override-included jobs were never in the legacy-kept list,
+            # so they won't have H1B marking. Default to 'no' (historical signal only).
+            for j in final_kept:
+                j.setdefault("past_h1b_support", "no")
+
             state = SqliteJobState(self.con)
             current, new = state.upsert_and_compute_new(
-                fetched_jobs,
-                run_id=run_id,
-                settings_hash=settings_hash,
+                final_kept,
+                run_id=None,
+                settings_hash=None,
+            )
+
+            # === Persist run membership for ALL evaluated jobs (included + excluded) ===
+            now = now_utc_iso()
+            self.con.executemany(
+                """
+                INSERT INTO run_jobs(run_id, dedupe_key, included, settings_hash, matched_at)
+                VALUES(?,?,?,?,?)
+                ON CONFLICT(run_id, dedupe_key) DO UPDATE SET
+                  included=excluded.included,
+                  settings_hash=excluded.settings_hash,
+                  matched_at=excluded.matched_at
+                """,
+                [
+                    (
+                        run_id,
+                        r["dedupe_key"],
+                        int(r.get("_audit_included") or 0),
+                        settings_hash,
+                        now,
+                    )
+                    for r in audit_rows
+                ],
+            )
+
+            # === Persist audit rows (explainability) ===
+            self.con.executemany(
+                """
+                INSERT INTO run_job_audit(
+                  run_id, dedupe_key, included, settings_hash, created_at,
+                  company_name, title, location, url, source_type, work_mode, reasons_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(run_id, dedupe_key) DO UPDATE SET
+                  included=excluded.included,
+                  settings_hash=excluded.settings_hash,
+                  created_at=excluded.created_at,
+                  company_name=excluded.company_name,
+                  title=excluded.title,
+                  location=excluded.location,
+                  url=excluded.url,
+                  source_type=excluded.source_type,
+                  work_mode=excluded.work_mode,
+                  reasons_json=excluded.reasons_json
+                """,
+                [
+                    (
+                        run_id,
+                        r["dedupe_key"],
+                        int(r.get("_audit_included") or 0),
+                        settings_hash,
+                        now,
+                        r.get("company_name", ""),
+                        r.get("title", ""),
+                        r.get("location", ""),
+                        r.get("url", ""),
+                        r.get("source_type", ""),
+                        r.get("work_mode", "unknown"),
+                        json.dumps(r.get("_audit_reasons") or []),
+                    )
+                    for r in audit_rows
+                ],
             )
 
             # Sort (H1B first, then first_seen)
@@ -212,7 +318,7 @@ class RunnerService:
         logs = _truncate(buf.getvalue(), max_chars=20000)
 
         stats = {
-            "fetched": len(fetched_jobs),
+            "fetched": len(final_kept),
             "unique": len(current),
             "new": len(new),
             "source_errors": source_errors,

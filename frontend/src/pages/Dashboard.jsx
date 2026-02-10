@@ -436,7 +436,7 @@ export default function Dashboard() {
                     <th align="left">Fetched</th>
                     <th align="left">Unique</th>
                     <th align="left">New</th>
-                    <th align="left">Filters</th>
+                    <th align="left">Actions</th>
                     <th align="left">Status</th>
                   </tr>
                 </thead>
@@ -455,9 +455,14 @@ export default function Dashboard() {
                         <td>{st?.unique ?? "—"}</td>
                         <td>{st?.new ?? "—"}</td>
                         <td>
-                          <button className="jw-btn small" type="button" onClick={() => openRunSettings(r)}>
-                            View
-                          </button>
+                          <div className="jw-row" style={{ gap: 8, flexWrap: "wrap" }}>
+                            <button className="jw-btn small" type="button" onClick={() => openRunSettings(r)}>
+                              Filters
+                            </button>
+                            <a className="jw-btn small" href={`/audit?run_id=${encodeURIComponent(r.run_id)}`}>
+                              Audit
+                            </a>
+                          </div>
                         </td>
                         <td>
                           {hasErrors ? (

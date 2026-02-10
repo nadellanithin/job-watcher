@@ -8,6 +8,8 @@ from app.api.health import router as health_router
 from app.api.run import router as run_router
 from app.api.jobs import router as jobs_router
 from app.api.runs import router as runs_router
+from app.api.audit import router as audit_router
+from app.api.overrides import router as overrides_router
 
 from app.core.scheduler import SchedulerService
 from app.api.status import router as status_router
@@ -43,6 +45,8 @@ def create_app() -> FastAPI:
     app.include_router(run_router, prefix="/api")
     app.include_router(jobs_router, prefix="/api")
     app.include_router(runs_router, prefix="/api")
+    app.include_router(audit_router, prefix="/api")
+    app.include_router(overrides_router, prefix="/api")
     app.include_router(status_router, prefix="/api")
     app.include_router(companies_router, prefix="/api")
     app.include_router(settings_router, prefix="/api")

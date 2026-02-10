@@ -56,6 +56,46 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
             """
         )
 
+    # run_job_audit: per-run explainability (included/excluded + reasons)
+    if not _has_table(con, "run_job_audit"):
+        con.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS run_job_audit (
+              run_id TEXT NOT NULL,
+              dedupe_key TEXT NOT NULL,
+              included INTEGER NOT NULL,
+              settings_hash TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              company_name TEXT NOT NULL,
+              title TEXT NOT NULL,
+              location TEXT NOT NULL,
+              url TEXT NOT NULL,
+              source_type TEXT NOT NULL,
+              work_mode TEXT NOT NULL,
+              reasons_json TEXT NOT NULL,
+              PRIMARY KEY(run_id, dedupe_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_run_job_audit_run_id ON run_job_audit(run_id);
+            CREATE INDEX IF NOT EXISTS idx_run_job_audit_included ON run_job_audit(included);
+            CREATE INDEX IF NOT EXISTS idx_run_job_audit_settings_hash ON run_job_audit(settings_hash);
+            """
+        )
+
+    # job_overrides: user overrides for a specific job (by dedupe_key)
+    if not _has_table(con, "job_overrides"):
+        con.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS job_overrides (
+              dedupe_key TEXT PRIMARY KEY,
+              action TEXT NOT NULL CHECK(action IN ('include','exclude')),
+              note TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_job_overrides_action ON job_overrides(action);
+            """
+        )
+
 
 def init_db(db_path: str, migration_sql_path: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
