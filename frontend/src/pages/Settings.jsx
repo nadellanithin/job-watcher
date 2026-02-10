@@ -170,6 +170,10 @@ export default function Settings() {
   const [includeKeywords, setIncludeKeywords] = useState([]);
   const [excludeKeywords, setExcludeKeywords] = useState([]);
   const [visaPhrases, setVisaPhrases] = useState([]);
+  const [excludeExceptions, setExcludeExceptions] = useState([]);
+
+  const [filterMode, setFilterMode] = useState("smart");
+  const [minScoreToInclude, setMinScoreToInclude] = useState(3);
 
   const [usOnly, setUsOnly] = useState(true);
   const [allowRemoteUs, setAllowRemoteUs] = useState(true);
@@ -189,6 +193,10 @@ export default function Settings() {
       setIncludeKeywords(s.include_keywords || []);
       setExcludeKeywords(s.exclude_keywords || []);
       setVisaPhrases(s.visa_restriction_phrases || []);
+      setExcludeExceptions(s.exclude_exceptions || []);
+
+      setFilterMode(s.filter_mode || "smart");
+      setMinScoreToInclude(Number.isFinite(s.min_score_to_include) ? s.min_score_to_include : 3);
 
       setUsOnly(Boolean(s.us_only));
       setAllowRemoteUs(Boolean(s.allow_remote_us));
@@ -214,6 +222,9 @@ export default function Settings() {
       include_keywords: includeKeywords,
       exclude_keywords: excludeKeywords,
       visa_restriction_phrases: visaPhrases,
+      exclude_exceptions: excludeExceptions,
+      filter_mode: filterMode,
+      min_score_to_include: Number(minScoreToInclude) || 3,
 
       us_only: usOnly,
       allow_remote_us: allowRemoteUs,
@@ -230,6 +241,9 @@ export default function Settings() {
     includeKeywords,
     excludeKeywords,
     visaPhrases,
+    excludeExceptions,
+    filterMode,
+    minScoreToInclude,
     usOnly,
     allowRemoteUs,
     preferredStates,
@@ -285,6 +299,41 @@ export default function Settings() {
             subtitle="Fast scan/edit using chips. Paste comma/newline lists to bulk add."
           >
             <div style={{ display: "grid", gap: 14 }}>
+              <div className="jw-row">
+                <div className="jw-col">
+                  <div className="jw-label">
+                    <span>Filter mode</span>
+                    <span className="jw-help">smart vs score</span>
+                  </div>
+                  <select className="jw-select" value={filterMode} onChange={(e) => setFilterMode(e.target.value)}>
+                    <option value="smart">Smart (deterministic)</option>
+                    <option value="score">Score (recommended)</option>
+                  </select>
+                  <div className="jw-muted2" style={{ fontSize: 12, marginTop: 6 }}>
+                    In score mode, include/exclude keywords adjust the score — they don’t hard-block jobs.
+                  </div>
+                </div>
+
+                <div className="jw-col">
+                  <div className="jw-label">
+                    <span>Min score to include</span>
+                    <span className="jw-help">score mode</span>
+                  </div>
+                  <input
+                    className="jw-input"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={minScoreToInclude}
+                    onChange={(e) => setMinScoreToInclude(e.target.value)}
+                    disabled={filterMode !== "score"}
+                  />
+                  <div className="jw-muted2" style={{ fontSize: 12, marginTop: 6 }}>
+                    Higher = stricter. Start at 3.
+                  </div>
+                </div>
+              </div>
+
               <ChipInput
                 label="Role keywords"
                 help="targets"
@@ -311,6 +360,16 @@ export default function Settings() {
                     onChange={setExcludeKeywords}
                     placeholder="intern, staff, principal…"
                   />
+
+                  <div style={{ marginTop: 12 }}>
+                    <ChipInput
+                      label="Exclude exceptions"
+                      help="rare"
+                      value={excludeExceptions}
+                      onChange={setExcludeExceptions}
+                      placeholder="phrases that should override an exclude hit…"
+                    />
+                  </div>
                 </div>
               </div>
 

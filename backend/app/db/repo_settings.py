@@ -8,6 +8,11 @@ DEFAULT_SETTINGS = {
     "exclude_keywords": [],
     "visa_restriction_phrases": [],
 
+    # Smarter filtering
+    "exclude_exceptions": [],
+    "filter_mode": "smart",  # smart|score
+    "min_score_to_include": 3,
+
     # Location / work mode
     "us_only": True,
     "allow_remote_us": True,
