@@ -25,7 +25,7 @@ function relativeTime(iso) {
   return `${day}d ago`;
 }
 
-function formatStats(statsJson) {
+function parseStats(statsJson) {
   if (!statsJson) return null;
   try {
     if (typeof statsJson === "string") return JSON.parse(statsJson);
@@ -35,9 +35,9 @@ function formatStats(statsJson) {
   }
 }
 
-function sumStats(runs) {
+function sumHeadline(runs) {
   if (!runs?.length) return { fetched: 0, unique: 0, new: 0 };
-  const st = formatStats(runs[0]?.stats_json) || {};
+  const st = parseStats(runs[0]?.stats_json) || {};
   return {
     fetched: st.fetched ?? 0,
     unique: st.unique ?? 0,
@@ -56,15 +56,22 @@ export default function Dashboard() {
   const [runLogs, setRunLogs] = useState("");
   const [logQuery, setLogQuery] = useState("");
 
-  const pollRef = useRef(null);
+  // Run settings modal ("receipt")
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [settingsModalLoading, setSettingsModalLoading] = useState(false);
+  const [settingsModalErr, setSettingsModalErr] = useState("");
+  const [settingsModalRun, setSettingsModalRun] = useState(null);
+  const [settingsModalSettings, setSettingsModalSettings] = useState(null);
 
   // Recent runs pagination
   const [runsPage, setRunsPage] = useState(1);
   const runsPageSize = 8;
 
+  const pollRef = useRef(null);
+
   const refreshRuns = async () => {
     const data = await apiGet("/api/runs");
-    setRuns(data);
+    setRuns(Array.isArray(data) ? data : []);
   };
 
   const refreshScheduler = async () => {
@@ -98,6 +105,38 @@ export default function Dashboard() {
     }
   };
 
+  const openRunSettings = async (run) => {
+    setSettingsModalRun(run || null);
+    setSettingsModalErr("");
+    setSettingsModalSettings(null);
+    setSettingsModalOpen(true);
+    if (!run?.run_id) return;
+
+    try {
+      setSettingsModalLoading(true);
+      const data = await apiGet(`/api/runs/${run.run_id}/settings`);
+      let parsed = null;
+      try {
+        parsed = data?.settings_json ? JSON.parse(data.settings_json) : null;
+      } catch {
+        parsed = null;
+      }
+      setSettingsModalSettings({ raw: data, settings: parsed });
+    } catch (e) {
+      setSettingsModalErr(String(e));
+    } finally {
+      setSettingsModalLoading(false);
+    }
+  };
+
+  const copyLogs = async (txt) => {
+    try {
+      await navigator.clipboard.writeText(txt || "");
+    } catch {
+      // ignore
+    }
+  };
+
   useEffect(() => {
     refreshAll();
 
@@ -111,8 +150,10 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const lastRun = runs?.[0];
-  const lastStats = useMemo(() => formatStats(lastRun?.stats_json), [lastRun]);
+  const lastRun = runs?.[0] || null;
+  const lastStats = useMemo(() => parseStats(lastRun?.stats_json), [lastRun]);
+
+  const headline = sumHeadline(runs);
 
   const derivedLogs = runLogs || lastStats?.logs || "";
   const filteredLogs = useMemo(() => {
@@ -124,11 +165,10 @@ export default function Dashboard() {
       .join("\n");
   }, [derivedLogs, logQuery]);
 
-  // Scheduler data + safe fallbacks
+  // Scheduler safe fallbacks
   const schedEnabled = scheduler?.enabled === true;
   const sched = schedEnabled ? scheduler : null;
 
-  // ✅ Fix: runs count sometimes comes under different field names depending on backend
   const schedRunCount =
     sched?.run_count ??
     sched?.runs ??
@@ -138,21 +178,10 @@ export default function Dashboard() {
     scheduler?.runCount ??
     0;
 
-  const schedLastStats = sched?.last_run_stats || null;
-  const headline = sumStats(runs);
-
-  const copyLogs = async () => {
-    try {
-      await navigator.clipboard.writeText(derivedLogs || "");
-    } catch {
-      // ignore
-    }
-  };
-
-  // Recent runs pagination calc
   const runsTotal = runs?.length || 0;
   const runsTotalPages = Math.max(1, Math.ceil(runsTotal / runsPageSize));
   const safeRunsPage = Math.min(runsPage, runsTotalPages);
+
   const pagedRuns = useMemo(() => {
     const start = (safeRunsPage - 1) * runsPageSize;
     return (runs || []).slice(start, start + runsPageSize);
@@ -170,7 +199,7 @@ export default function Dashboard() {
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
-      {/* Hero Header */}
+      {/* Hero */}
       <div className="jw-card" style={{ background: "var(--surface2)" }}>
         <div
           className="jw-card-b"
@@ -180,6 +209,8 @@ export default function Dashboard() {
             gap: 12,
             flexWrap: "wrap",
             alignItems: "center",
+            paddingTop: 12,
+            paddingBottom: 12,
           }}
         >
           <div style={{ minWidth: 320 }}>
@@ -190,7 +221,9 @@ export default function Dashboard() {
               ) : (
                 <span className="jw-badge warn">Scheduler: Disabled</span>
               )}
-              <span className="jw-badge subtle">Runs: <b style={{ marginLeft: 6 }}>{schedEnabled ? schedRunCount : 0}</b></span>
+              <span className="jw-badge subtle">
+                Runs: <b style={{ marginLeft: 6 }}>{schedEnabled ? schedRunCount : 0}</b>
+              </span>
             </div>
 
             <div style={{ marginTop: 10, fontSize: 22, fontWeight: 1000 }}>
@@ -216,12 +249,15 @@ export default function Dashboard() {
       {err ? (
         <div className="jw-alert">
           <b>Error</b>
-          <div style={{ marginTop: 6 }} className="jw-muted">{err}</div>
+          <div style={{ marginTop: 6 }} className="jw-muted">
+            {err}
+          </div>
         </div>
       ) : null}
 
-      {/* Summary cards */}
+      {/* ✅ Two-card row: Run Summary (left) + Scheduler (right) */}
       <div className="jw-row">
+        {/* Run Summary */}
         <div className="jw-col jw-card">
           <div className="jw-card-h">
             <div className="jw-card-title">Run summary</div>
@@ -230,10 +266,17 @@ export default function Dashboard() {
             <span className="jw-pill" title={lastRun?.finished_at ? formatLocal(lastRun.finished_at) : ""}>
               <span style={{ fontWeight: 900 }}>{`Last run ${lastRunText}`}</span>
             </span>
-            <div className="jw-toolbar">
-              <span className="jw-badge subtle">Fetched: <b>{headline.fetched ?? "—"}</b></span>
-              <span className="jw-badge subtle">Unique: <b>{headline.unique ?? "—"}</b></span>
-              <span className="jw-badge subtle">New: <b>{headline.new ?? "—"}</b></span>
+
+            <div className="jw-toolbar" style={{ marginTop: 10 }}>
+              <span className="jw-badge subtle">
+                Fetched: <b>{headline.fetched ?? "—"}</b>
+              </span>
+              <span className="jw-badge subtle">
+                Unique: <b>{headline.unique ?? "—"}</b>
+              </span>
+              <span className="jw-badge subtle">
+                New: <b>{headline.new ?? "—"}</b>
+              </span>
             </div>
 
             <div style={{ marginTop: 12 }} className="jw-muted">
@@ -242,69 +285,73 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Scheduler */}
         <div className="jw-col jw-card">
-          <div className="jw-card-h" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div className="jw-card-h" style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
             <div className="jw-card-title">Scheduler</div>
-            <button className="jw-btn small" onClick={refreshScheduler} type="button">
+            <button className="jw-btn small" onClick={refreshScheduler} disabled={loading || runningNow} type="button">
               Refresh
             </button>
           </div>
+
           <div className="jw-card-b">
-            {!scheduler ? (
-              <div className="jw-muted">Loading scheduler status…</div>
-            ) : !schedEnabled ? (
-              <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              {schedEnabled ? (
+                <span className="jw-badge ok">Enabled</span>
+              ) : (
                 <span className="jw-badge warn">Disabled</span>
-                <div className="jw-muted">{scheduler?.reason || "Unknown reason"}</div>
-              </div>
-            ) : (
-              <div style={{ display: "grid", gap: 8 }}>
-                <div className="jw-toolbar" style={{ flexWrap: "wrap" }}>
-                  <span className="jw-badge ok">Enabled</span>
-                  <span className="jw-badge subtle">Mode: <b>{sched.mode ?? "—"}</b></span>
-                  <span className="jw-badge subtle">Interval: <b>{sched.interval_minutes ?? "—"}m</b></span>
-                  <span className="jw-badge subtle">Runs: <b>{schedRunCount}</b></span>
-                </div>
+              )}
+              <span className="jw-badge subtle">
+                Mode: <b>{scheduler?.mode ?? "off"}</b>
+              </span>
+              <span className="jw-badge subtle">
+                Interval: <b>{scheduler?.interval_minutes ?? "—"}m</b>
+              </span>
+              <span className="jw-badge subtle">
+                Runs: <b>{schedRunCount}</b>
+              </span>
+            </div>
 
-                <div className="jw-muted">
-                  Last scheduled run: <b>{formatLocal(sched.last_run_at)}</b>
-                </div>
-
-                {schedLastStats ? (
-                  <div className="jw-toolbar">
-                    <span className="jw-badge subtle">Fetched: <b>{schedLastStats.fetched ?? "—"}</b></span>
-                    <span className="jw-badge subtle">Unique: <b>{schedLastStats.unique ?? "—"}</b></span>
-                    <span className="jw-badge subtle">New: <b>{schedLastStats.new ?? "—"}</b></span>
-                  </div>
-                ) : null}
-              </div>
-            )}
+            <div className="jw-muted2" style={{ marginTop: 10, fontSize: 12 }}>
+              Last scheduled run: <b>{scheduler?.last_run_at ? formatLocal(scheduler.last_run_at) : "—"}</b>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Logs */}
       <div className="jw-card">
-        <div className="jw-card-h" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div
+          className="jw-card-h"
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+          }}
+        >
           <div>
             <div className="jw-card-title">Latest run logs</div>
             <div className="jw-muted2" style={{ marginTop: 4, fontSize: 12 }}>
               Search within logs to quickly spot “0 jobs”, pagination, or blocked pages.
             </div>
           </div>
+
           <div className="jw-toolbar">
             <input
               className="jw-input"
-              style={{ width: 260 }}
+              style={{ minWidth: 240 }}
               value={logQuery}
               onChange={(e) => setLogQuery(e.target.value)}
               placeholder="filter logs…"
             />
-            <button className="jw-btn small" onClick={copyLogs} disabled={!derivedLogs} type="button">
+            <button className="jw-btn small" onClick={() => copyLogs(derivedLogs)} disabled={!derivedLogs} type="button">
               Copy
             </button>
           </div>
         </div>
+
         <div className="jw-card-b">
           {derivedLogs ? (
             <pre className="jw-log">{filteredLogs}</pre>
@@ -315,15 +362,24 @@ export default function Dashboard() {
           )}
 
           <div className="jw-muted2" style={{ marginTop: 10, fontSize: 12 }}>
-            Tip: If a company repeatedly shows missing roles, switch its Career URL render mode to <b>playwright</b> in Companies
-            (requires backend env <b>CAREERURL_PLAYWRIGHT=1</b>).
+            Tip: If a career page is JS-rendered, set its mode to <b>playwright</b> (requires backend env{" "}
+            <b>CAREERURL_PLAYWRIGHT=1</b>).
           </div>
         </div>
       </div>
 
-      {/* Recent runs with pagination */}
+      {/* Recent runs */}
       <div className="jw-card">
-        <div className="jw-card-h" style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <div
+          className="jw-card-h"
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 10,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
           <div>
             <div className="jw-card-title">Recent runs</div>
             <div className="jw-muted2" style={{ marginTop: 6, fontSize: 12 }}>
@@ -380,19 +436,15 @@ export default function Dashboard() {
                     <th align="left">Fetched</th>
                     <th align="left">Unique</th>
                     <th align="left">New</th>
+                    <th align="left">Filters</th>
                     <th align="left">Status</th>
                   </tr>
                 </thead>
+
                 <tbody>
                   {pagedRuns.map((r) => {
-                    const st = formatStats(r.stats_json);
+                    const st = parseStats(r.stats_json);
                     const hasErrors = st?.source_errors && Object.keys(st.source_errors).length;
-                    const errText = hasErrors
-                      ? Object.entries(st.source_errors)
-                          .slice(0, 3)
-                          .map(([k, v]) => `${k}: ${v}`)
-                          .join(" • ")
-                      : "—";
 
                     return (
                       <tr key={r.run_id}>
@@ -403,10 +455,13 @@ export default function Dashboard() {
                         <td>{st?.unique ?? "—"}</td>
                         <td>{st?.new ?? "—"}</td>
                         <td>
+                          <button className="jw-btn small" type="button" onClick={() => openRunSettings(r)}>
+                            View
+                          </button>
+                        </td>
+                        <td>
                           {hasErrors ? (
-                            <span className="jw-badge danger" title={errText}>
-                              Has errors
-                            </span>
+                            <span className="jw-badge danger">Has errors</span>
                           ) : (
                             <span className="jw-badge ok">OK</span>
                           )}
@@ -420,6 +475,85 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* Run Filters Modal */}
+      {settingsModalOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setSettingsModalOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.45)",
+            zIndex: 50,
+            display: "grid",
+            placeItems: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            className="jw-card"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(980px, 100%)",
+              maxHeight: "85vh",
+              overflow: "auto",
+              boxShadow: "0 25px 70px rgba(0,0,0,0.35)",
+            }}
+          >
+            <div
+              className="jw-card-h"
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 10,
+                alignItems: "center",
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <div className="jw-card-title">Run filters (settings used)</div>
+                <div className="jw-muted2" style={{ marginTop: 6, fontSize: 12 }}>
+                  Run: <b>{settingsModalRun?.run_id}</b>
+                </div>
+              </div>
+
+              <div className="jw-toolbar">
+                <button className="jw-btn small" onClick={() => setSettingsModalOpen(false)} type="button">
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <div className="jw-card-b" style={{ display: "grid", gap: 14 }}>
+              {settingsModalErr ? (
+                <div className="jw-alert">
+                  <b>Error</b>
+                  <div style={{ marginTop: 6 }} className="jw-muted">
+                    {settingsModalErr}
+                  </div>
+                </div>
+              ) : null}
+
+              {settingsModalLoading ? (
+                <div className="jw-muted">Loading settings…</div>
+              ) : settingsModalSettings?.settings ? (
+                <>
+                  <details>
+                    <summary style={{ cursor: "pointer", fontWeight: 900 }}>View full settings JSON</summary>
+                    <pre className="jw-log" style={{ marginTop: 10, whiteSpace: "pre-wrap" }}>
+                      {JSON.stringify(settingsModalSettings.settings, null, 2)}
+                    </pre>
+                  </details>
+                </>
+              ) : (
+                <div className="jw-empty">No settings snapshot found for this run.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

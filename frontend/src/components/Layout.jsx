@@ -273,7 +273,7 @@ html[data-theme="dark"] .jw-pill{ background: rgba(15,23,42,0.45); }
 .jw-table td{
   padding: 10px 8px;
   border-bottom: 1px solid var(--border);
-  vertical-align: top;
+  vertical-align: middle;
 }
 .jw-table th{
   font-size: 12px;
@@ -654,7 +654,7 @@ html[data-theme="dark"] .jw-badge.danger{ color: #fecaca; }
 .jw-table th, .jw-table td{
   padding: 12px 12px;
   border-bottom: 1px solid rgba(217,225,238,0.55);
-  vertical-align: top;
+  vertical-align: middle;
 }
 html[data-theme="dark"] .jw-table th,
 html[data-theme="dark"] .jw-table td{
@@ -995,7 +995,7 @@ html[data-theme="dark"] .jw-mini{ background: rgba(15,23,42,0.35); }
 .jw-table td{
   padding: 10px 8px;
   border-bottom: 1px solid var(--border);
-  vertical-align: top;
+  vertical-align: middle;
 }
 .jw-table th{
   font-size: 12px;

@@ -2,31 +2,31 @@ import { useEffect, useState } from "react";
 import { apiGet } from "../api/client";
 import JobsTable from "../components/JobsTable";
 
-export default function NewJobs() {
-  const [jobs, setJobs] = useState([]);
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(true);
+function fmtLocal(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
 
-  const load = async () => {
-    setLoading(true);
-    setErr("");
-    try {
-      const data = await apiGet("/api/jobs?scope=new");
-      setJobs(data);
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
+export default function NewJobs() {
+  const [latestRun, setLatestRun] = useState(null);
+  const [err, setErr] = useState("");
+  const [meta, setMeta] = useState({ total: 0, page: 1, pageSize: 25 });
 
   useEffect(() => {
-    load();
+    (async () => {
+      try {
+        const rs = await apiGet("/api/runs");
+        setLatestRun(Array.isArray(rs) ? rs[0] : null);
+      } catch (e) {
+        setErr(String(e));
+      }
+    })();
   }, []);
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
-      {/* Compact page header (no wasted space) */}
       <div className="jw-card" style={{ background: "var(--surface2)" }}>
         <div
           className="jw-card-b"
@@ -40,20 +40,22 @@ export default function NewJobs() {
             paddingBottom: 12,
           }}
         >
-          <div style={{ minWidth: 260 }}>
+          <div style={{ minWidth: 280 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span className="jw-badge subtle">✨ New jobs</span>
-              <span className="jw-badge subtle">{jobs?.length || 0} jobs</span>
+              <span className="jw-badge subtle">✨ New Jobs</span>
+              <span className="jw-badge subtle">{meta.total || 0} jobs</span>
+              <span className="jw-badge ok">Latest run only</span>
             </div>
-            <div className="jw-muted2" style={{ marginTop: 8, fontSize: 12 }}>
-              Jobs detected as “new since last run”.
-            </div>
-          </div>
 
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <button className="jw-btn" onClick={load} disabled={loading} type="button">
-              {loading ? "Refreshing…" : "Refresh"}
-            </button>
+            <div className="jw-muted2" style={{ marginTop: 8, fontSize: 12 }}>
+              {latestRun?.started_at ? (
+                <>
+                  Based on the latest run: <b>{fmtLocal(latestRun.started_at)}</b>
+                </>
+              ) : (
+                <>Run the fetcher to populate new jobs.</>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -67,22 +69,10 @@ export default function NewJobs() {
         </div>
       ) : null}
 
-      {loading ? (
-        <div className="jw-card">
-          <div className="jw-card-b">
-            <div className="jw-muted">Loading new jobs…</div>
-          </div>
-        </div>
-      ) : !jobs?.length ? (
-        <div className="jw-empty">
-          No new jobs since the last run. Try running the fetcher from the Dashboard.
-        </div>
-      ) : (
-        <JobsTable jobs={jobs} />
-      )}
+      <JobsTable scope="new" onMetaChange={setMeta} />
 
       <div className="jw-muted2" style={{ fontSize: 12 }}>
-        H-1B badge is a historical signal (USCIS data) — not a guarantee.
+        New jobs are calculated relative to prior runs (first time seen).
       </div>
     </div>
   );
