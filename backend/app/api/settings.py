@@ -15,6 +15,11 @@ class SettingsModel(BaseModel):
     exclude_keywords: Optional[List[str]] = None
     visa_restriction_phrases: Optional[List[str]] = None
 
+    # Smarter filtering
+    exclude_exceptions: Optional[List[str]] = None
+    filter_mode: Optional[Literal["smart", "score"]] = None
+    min_score_to_include: Optional[int] = None
+
     us_only: Optional[bool] = None
     allow_remote_us: Optional[bool] = None
     preferred_states: Optional[List[str]] = None
@@ -44,6 +49,8 @@ def _group_label(settings: Dict[str, Any]) -> str:
     visa = settings.get("visa_restriction_phrases") or []
     states = settings.get("preferred_states") or []
     work_mode = settings.get("work_mode") or "any"
+    filter_mode = settings.get("filter_mode") or "smart"
+    min_score = settings.get("min_score_to_include")
     us_only = bool(settings.get("us_only", True))
     remote_us = bool(settings.get("allow_remote_us", True))
 
@@ -62,6 +69,10 @@ def _group_label(settings: Dict[str, Any]) -> str:
     if states:
         parts.append(f"States: {len(states)}")
     parts.append(f"Mode: {work_mode}")
+    if filter_mode == "score":
+        parts.append(f"Score≥{min_score if min_score is not None else 3}")
+    else:
+        parts.append("Smart")
     parts.append("US-only" if us_only else "Any country")
     if remote_us:
         parts.append("Remote US")

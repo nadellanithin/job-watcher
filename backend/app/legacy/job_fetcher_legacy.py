@@ -1516,88 +1516,261 @@ def normalize_career_job(raw: Dict[str, Any], label: str, employer_name: str) ->
 # Filter Agent
 # =========================
 class FilterAgent:
+    """Deterministic filtering with optional scoring mode.
+
+    Modes:
+      - smart (default): boundary/phrase matching + field-aware gating (role keywords required if provided).
+      - score: compute a score from evidence; include/exclude keywords contribute to score (include keywords do NOT gate).
+    """
+
     def __init__(self, config: Dict[str, Any]):
         self.role_keywords: List[str] = config.get("role_keywords") or []
         self.include_keywords: List[str] = config.get("include_keywords") or []
 
-        base_exclude: List[str] = config.get("exclude_keywords") or []
+        # Split excludes into:
+        # - visa restriction phrases (hard fail)
+        # - user excludes (soft by default in score mode; hard in smart mode)
+        self.user_exclude_keywords: List[str] = config.get("exclude_keywords") or []
+
         visa_phrases = config.get("visa_restriction_phrases")
         if visa_phrases is None:
             visa_phrases = DEFAULT_VISA_RESTRICTION_PHRASES
-
-        self.exclude_keywords: List[str] = list(base_exclude) + (
+        self.visa_restriction_phrases: List[str] = (
             list(visa_phrases) if isinstance(visa_phrases, list) else []
-        )
+        ) or []
+
+        # Optional manual guardrails (still supported, but should be rarely needed after boundary matching).
+        self.exclude_exceptions: List[str] = config.get("exclude_exceptions") or []
 
         self.preferred_states: List[str] = [s.upper() for s in (config.get("preferred_states") or [])]
         self.allow_remote_us: bool = bool(config.get("allow_remote_us", True))
-        self.work_mode_preference: str = (config.get("work_mode_preference") or "any").lower()
+
+        # Back-compat: some parts of the app still send work_mode instead of work_mode_preference.
+        self.work_mode_preference: str = (
+            (config.get("work_mode_preference") or config.get("work_mode") or "any").lower()
+        )
+
+        self.filter_mode: str = (config.get("filter_mode") or "smart").lower()
+        if self.filter_mode not in ("smart", "score"):
+            self.filter_mode = "smart"
+
+        self.min_score_to_include: int = int(config.get("min_score_to_include") or 3)
 
     def keep(self, job: NormalizedJob) -> bool:
         keep, _reasons = self.explain(job)
         return keep
 
-    def _first_match(self, haystack: str, needles: List[str]) -> Optional[str]:
-        h = (haystack or "").lower()
-        for n in needles or []:
-            n2 = (n or "").strip().lower()
-            if n2 and n2 in h:
-                return n
+    # -------------------------
+    # Matching helpers
+    # -------------------------
+    def _norm(self, s: str) -> str:
+        return (s or "").strip().lower()
+
+    def _is_single_token(self, s: str) -> bool:
+        return bool(re.fullmatch(r"[a-z0-9][a-z0-9-]*", self._norm(s)))
+
+    def _word_variants(self, token: str) -> List[str]:
+        """Generate conservative variants for single-word tokens."""
+        t = self._norm(token)
+        if not t:
+            return []
+        out = {t}
+
+        # Simple plural/variant handling for alphabetic words (keeps it deterministic).
+        if re.fullmatch(r"[a-z]+", t) and len(t) >= 4:
+            out.add(t + "s")
+            out.add(t + "es")
+            # common role-ish forms
+            out.add(t + "ing")
+            out.add(t + "ship")
+            out.add(t + "ships")
+        return sorted(out, key=len, reverse=True)
+
+    def _match_one(self, text: str, needle: str) -> Optional[Tuple[str, str]]:
+        """Return (match_type, matched_text) for the first match, else None."""
+        t = self._norm(text)
+        n = self._norm(needle)
+        if not t or not n:
+            return None
+
+        # Phrases: normalized substring.
+        if not self._is_single_token(n) or " " in n:
+            if n in t:
+                return ("phrase", needle)
+            return None
+
+        # Single token: word boundary match with variants.
+        variants = self._word_variants(n)
+        for v in variants:
+            # hyphens are treated as word-ish chars; boundary with  is OK for most cases.
+            pat = re.compile(rf"\b{re.escape(v)}\b", re.IGNORECASE)
+            if pat.search(t):
+                return ("word", v)
         return None
 
+    def _first_match_in_fields(
+        self,
+        fields: List[Tuple[str, str]],
+        needles: List[str],
+    ) -> Optional[Tuple[str, str, str]]:
+        """Return (field, match_type, matched) for the first match across ordered fields."""
+        for field_name, field_text in fields:
+            for n in needles or []:
+                hit = self._match_one(field_text, n)
+                if hit:
+                    match_type, matched = hit
+                    return (field_name, match_type, matched)
+        return None
+
+    def _has_exception(self, text: str) -> Optional[str]:
+        t = self._norm(text)
+        for ex in self.exclude_exceptions or []:
+            ex2 = self._norm(ex)
+            if ex2 and ex2 in t:
+                return ex
+        return None
+
+    # -------------------------
+    # Filtering + explainability
+    # -------------------------
     def explain(self, job: NormalizedJob) -> Tuple[bool, List[str]]:
-        """Return (keep, reasons[]) without changing the underlying filter behavior."""
         reasons: List[str] = []
 
+        # Hard location gate
         if not is_us_location(job.location):
             return False, ["location:not_us"]
 
-        haystack = f"{job.title}\n{job.description}\n{job.location}"
-
-        if self.exclude_keywords:
-            hit = self._first_match(haystack, self.exclude_keywords)
-            if hit:
-                reasons.append(f"exclude:matched:{hit}")
-                return False, reasons
-
-        title_desc = f"{job.title}\n{job.description}"
-        if self.role_keywords:
-            hit = self._first_match(title_desc, self.role_keywords)
-            if not hit:
-                reasons.append("role_keywords:no_match")
-                return False, reasons
-            reasons.append(f"role_keywords:matched:{hit}")
-
-        if self.include_keywords:
-            hit = self._first_match(haystack, self.include_keywords)
-            if not hit:
-                reasons.append("include_keywords:no_match")
-                return False, reasons
-            reasons.append(f"include_keywords:matched:{hit}")
-
+        # Hard work-mode gate (if set)
         if self.work_mode_preference != "any" and job.work_mode != self.work_mode_preference:
-            reasons.append(f"work_mode:mismatch:{job.work_mode}->{self.work_mode_preference}")
-            return False, reasons
+            return False, [f"work_mode:mismatch:{job.work_mode}->{self.work_mode_preference}"]
 
-        if is_remote_us(job.location):
-            if not self.allow_remote_us:
-                reasons.append("remote_us:blocked")
-                return False, reasons
-            reasons.append("remote_us:allowed")
-            return True, reasons
+        # Remote US gate
+        if is_remote_us(job.location) and not self.allow_remote_us:
+            return False, ["remote_us:blocked"]
 
-        if self.preferred_states:
+        # State gate for non-remote locations if preferred_states configured
+        if self.preferred_states and not is_remote_us(job.location):
             st = extract_us_state_code(job.location)
             if not st:
-                reasons.append("state:missing")
-                return False, reasons
+                return False, ["state:missing"]
             if st not in self.preferred_states:
-                reasons.append(f"state:not_allowed:{st}")
-                return False, reasons
+                return False, [f"state:not_allowed:{st}"]
             reasons.append(f"state:allowed:{st}")
 
-        return True, reasons
+        # Field sets (ordered) for different signal types
+        fields_role = [
+            ("title", job.title),
+            ("department", getattr(job, "department", "") or ""),
+            ("team", getattr(job, "team", "") or ""),
+            ("description", job.description),
+        ]
+        fields_include = [
+            ("title", job.title),
+            ("department", getattr(job, "department", "") or ""),
+            ("team", getattr(job, "team", "") or ""),
+            ("location", job.location),
+            ("description", job.description),
+        ]
+        fields_all = fields_include  # excludes can match anywhere
 
+        # Visa restriction phrases are always hard fail (independent of mode)
+        if self.visa_restriction_phrases:
+            hit = self._first_match_in_fields(fields_all, self.visa_restriction_phrases)
+            if hit:
+                field, match_type, matched = hit
+                return False, [f"visa_restriction:matched:{field}:{match_type}:{matched}"]
+
+        # Exception phrases are checked against the combined text (cheap + deterministic)
+        combined = "\n".join([job.title, getattr(job, "department", "") or "", getattr(job, "team", "") or "", job.location, job.description])
+
+        # -------------------------
+        # SMART MODE (gated)
+        # -------------------------
+        if self.filter_mode == "smart":
+            # User excludes are hard fail (unless exception phrase exists)
+            if self.user_exclude_keywords:
+                hit = self._first_match_in_fields(fields_all, self.user_exclude_keywords)
+                if hit:
+                    ex = self._has_exception(combined)
+                    if ex:
+                        reasons.append(f"exclude:hit_but_exception:{hit[2]}:{ex}")
+                    else:
+                        field, match_type, matched = hit
+                        return False, [f"exclude:matched:{field}:{match_type}:{matched}"]
+
+            # Role keywords gate (if provided)
+            if self.role_keywords:
+                hit = self._first_match_in_fields(fields_role, self.role_keywords)
+                if not hit:
+                    reasons.append("role_keywords:no_match")
+                    return False, reasons
+                field, match_type, matched = hit
+                reasons.append(f"role_keywords:matched:{field}:{match_type}:{matched}")
+
+            # Include keywords DO NOT gate in smart mode anymore; they only add an explainable signal.
+            if self.include_keywords:
+                hit = self._first_match_in_fields(fields_include, self.include_keywords)
+                if hit:
+                    field, match_type, matched = hit
+                    reasons.append(f"include_keywords:matched:{field}:{match_type}:{matched}")
+                else:
+                    reasons.append("include_keywords:no_match")
+
+            if is_remote_us(job.location):
+                reasons.append("remote_us:allowed")
+
+            return True, reasons
+
+        # -------------------------
+        # SCORE MODE
+        # -------------------------
+        score = 0
+        contrib: List[str] = []
+
+        # Role evidence (preferred)
+        role_hit = None
+        if self.role_keywords:
+            role_hit = self._first_match_in_fields(fields_role, self.role_keywords)
+            if role_hit:
+                field, match_type, matched = role_hit
+                w = 3 if field == "title" else 2 if field in ("department", "team") else 1
+                score += w
+                contrib.append(f"score:+{w}:role:{field}:{match_type}:{matched}")
+
+        # Include evidence (boost only)
+        include_hit = None
+        if self.include_keywords:
+            include_hit = self._first_match_in_fields(fields_include, self.include_keywords)
+            if include_hit:
+                field, match_type, matched = include_hit
+                w = 2 if field == "title" else 1
+                score += w
+                contrib.append(f"score:+{w}:include:{field}:{match_type}:{matched}")
+
+        # User excludes become negative score by default (unless exception phrase exists)
+        if self.user_exclude_keywords:
+            hit = self._first_match_in_fields(fields_all, self.user_exclude_keywords)
+            if hit:
+                ex = self._has_exception(combined)
+                if ex:
+                    contrib.append(f"exclude:hit_but_exception:{hit[2]}:{ex}")
+                else:
+                    field, match_type, matched = hit
+                    score -= 4
+                    contrib.append(f"score:-4:exclude:{field}:{match_type}:{matched}")
+
+        # If we have *no* relevance evidence at all, drop it. This prevents flooding when both keyword lists are empty-ish.
+        if self.role_keywords and not role_hit and not include_hit:
+            return False, ["relevance:no_signals"] + contrib
+
+        keep = score >= self.min_score_to_include
+        reasons.extend(contrib)
+        reasons.append(f"score:total:{score}:threshold:{self.min_score_to_include}")
+
+        if is_remote_us(job.location):
+            reasons.append("remote_us:allowed")
+
+        return keep, reasons
 
 # =========================
 # Source wiring
