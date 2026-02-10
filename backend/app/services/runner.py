@@ -1,6 +1,7 @@
 import io
 import json
 import uuid
+import hashlib
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 
@@ -24,21 +25,56 @@ def _truncate(s: str, max_chars: int = 20000) -> str:
     return s[:max_chars] + "\n... (truncated)\n"
 
 
+def _take(lst, n=8):
+    return (lst or [])[:n]
+
+
 class RunnerService:
     def __init__(self, con):
         self.con = con
 
     def run_once(self) -> dict:
         started = now_utc_iso()
+        user_id = "default"
+
+        # Create run_id early so downstream can write membership rows
+        run_id = str(uuid.uuid4())
 
         # Capture all stdout/stderr logs during run (legacy fetcher prints)
         buf = io.StringIO()
 
         with redirect_stdout(buf), redirect_stderr(buf):
-            settings = get_settings(self.con, "default")
+            settings = get_settings(self.con, user_id)
 
-            # Build legacy sources list from DB companies (match legacy config format)
-            companies = list_companies(self.con, "default")
+            # Stable fingerprint of settings that drove this run.
+            settings_hash = hashlib.sha256(
+                json.dumps(settings or {}, sort_keys=True).encode("utf-8")
+            ).hexdigest()
+
+            # High-signal summary for UI (avoid dumping full JSON everywhere)
+            settings_summary = {
+                "role_keywords": _take(settings.get("role_keywords")),
+                "include_keywords": _take(settings.get("include_keywords")),
+                "exclude_keywords": _take(settings.get("exclude_keywords")),
+                "visa_restriction_phrases": _take(settings.get("visa_restriction_phrases")),
+                "counts": {
+                    "role_keywords": len(settings.get("role_keywords") or []),
+                    "include_keywords": len(settings.get("include_keywords") or []),
+                    "exclude_keywords": len(settings.get("exclude_keywords") or []),
+                    "visa_restriction_phrases": len(settings.get("visa_restriction_phrases") or []),
+                    "preferred_states": len(settings.get("preferred_states") or []),
+                    "uscis_h1b_years": len(settings.get("uscis_h1b_years") or []),
+                },
+                "flags": {
+                    "us_only": bool(settings.get("us_only")),
+                    "allow_remote_us": bool(settings.get("allow_remote_us")),
+                    "work_mode": settings.get("work_mode") or "any",
+                },
+                "uscis_h1b_years": settings.get("uscis_h1b_years") or [],
+                "preferred_states": _take(settings.get("preferred_states"), n=10),
+            }
+
+            companies = list_companies(self.con, user_id)
 
             legacy_sources = []
             for c in companies:
@@ -68,7 +104,6 @@ class RunnerService:
                                     "type": "career_url",
                                     "url": url,
                                     "label": company_label,
-                                    # per-company mode controlled via UI: requests|playwright
                                     "mode": (src.get("mode") or "requests").strip().lower(),
                                     "employer_name": employer_name,
                                 }
@@ -78,9 +113,7 @@ class RunnerService:
 
             fetched_jobs, source_errors, h1b_errors, discovered_sources = fetch_jobs_via_legacy(config)
 
-            # Persist ATS discoveries so career_url wrappers (like cedar.com/open-roles)
-            # get upgraded to a first-class GH/Lever source after the first successful run.
-            # This makes future runs faster and more reliable.
+            # Persist ATS discoveries (optional upgrade path: career_url -> greenhouse/lever)
             if discovered_sources:
                 companies_by_name = {((c.get("company_name") or "").strip().lower()): c for c in companies}
                 for d in discovered_sources:
@@ -98,7 +131,6 @@ class RunnerService:
                             continue
 
                         sources = list(c.get("sources") or [])
-                        # If the ATS source is already present, do nothing.
                         already = any(
                             (s.get("type") or "").strip().lower() == stype and (s.get("slug") or "").strip() == slug
                             for s in sources
@@ -108,19 +140,15 @@ class RunnerService:
 
                         sources.append({"type": stype, "slug": slug})
 
-                        # Remove the specific career_url that led to the discovery so we stop scraping it.
-                        # This is the "upgrade" behavior you want (career_url -> GH/Lever).
                         if from_url:
                             sources = [
-                                s
-                                for s in sources
+                                s for s in sources
                                 if not (
                                     (s.get("type") or "").strip().lower() == "career_url"
                                     and (s.get("url") or "").strip() == from_url
                                 )
                             ]
 
-                        # Prefer the discovered ATS over career_url in priority ordering.
                         priority = list(c.get("source_priority") or [])
                         if stype in priority:
                             priority = [p for p in priority if p != stype]
@@ -133,7 +161,7 @@ class RunnerService:
                             "source_priority": priority,
                             "fetch_mode": c.get("fetch_mode"),
                         }
-                        update_company(self.con, c["id"], c.get("user_id") or "default", updated_payload)
+                        update_company(self.con, c["id"], c.get("user_id") or user_id, updated_payload)
                         print(f"[discovery][{name}] upgraded_to={stype} slug={slug} removed_career_url={bool(from_url)}")
                     except Exception as e:
                         print(f"[discovery] persist failed err={e}")
@@ -156,9 +184,14 @@ class RunnerService:
                 j.setdefault("date_posted", "")
                 j.setdefault("source_type", "")
                 j.setdefault("past_h1b_support", "no")
+                j.setdefault("work_mode", "unknown")
 
             state = SqliteJobState(self.con)
-            current, new = state.upsert_and_compute_new(fetched_jobs)
+            current, new = state.upsert_and_compute_new(
+                fetched_jobs,
+                run_id=run_id,
+                settings_hash=settings_hash,
+            )
 
             # Sort (H1B first, then first_seen)
             current.sort(
@@ -178,24 +211,41 @@ class RunnerService:
 
         logs = _truncate(buf.getvalue(), max_chars=20000)
 
-        # Store logs + errors in stats_json so /api/runs can show them too
         stats = {
             "fetched": len(fetched_jobs),
             "unique": len(current),
             "new": len(new),
             "source_errors": source_errors,
             "h1b_errors_count": len(h1b_errors or []),
+            "settings_hash": settings_hash,
+            "settings_summary": settings_summary,
             "logs": logs,
         }
 
-        run_id = str(uuid.uuid4())
         self.con.execute(
             "INSERT INTO runs(run_id, started_at, finished_at, stats_json) VALUES(?,?,?,?)",
             (run_id, started, finished, json.dumps(stats)),
         )
+
+        # Persist settings snapshot for this run
+        try:
+            self.con.execute(
+                """
+                INSERT INTO run_settings(run_id, user_id, settings_hash, settings_json, created_at)
+                VALUES(?,?,?,?,?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                  user_id=excluded.user_id,
+                  settings_hash=excluded.settings_hash,
+                  settings_json=excluded.settings_json,
+                  created_at=excluded.created_at
+                """,
+                (run_id, user_id, settings_hash, json.dumps(settings or {}), finished),
+            )
+        except Exception:
+            pass
+
         self.con.commit()
 
-        # Return logs for immediate UI display
         return {
             "run_id": run_id,
             "started_at": started,
