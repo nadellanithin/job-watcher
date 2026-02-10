@@ -1534,33 +1534,69 @@ class FilterAgent:
         self.work_mode_preference: str = (config.get("work_mode_preference") or "any").lower()
 
     def keep(self, job: NormalizedJob) -> bool:
+        keep, _reasons = self.explain(job)
+        return keep
+
+    def _first_match(self, haystack: str, needles: List[str]) -> Optional[str]:
+        h = (haystack or "").lower()
+        for n in needles or []:
+            n2 = (n or "").strip().lower()
+            if n2 and n2 in h:
+                return n
+        return None
+
+    def explain(self, job: NormalizedJob) -> Tuple[bool, List[str]]:
+        """Return (keep, reasons[]) without changing the underlying filter behavior."""
+        reasons: List[str] = []
+
         if not is_us_location(job.location):
-            return False
+            return False, ["location:not_us"]
 
         haystack = f"{job.title}\n{job.description}\n{job.location}"
 
-        if self.exclude_keywords and contains_any(haystack, self.exclude_keywords):
-            return False
+        if self.exclude_keywords:
+            hit = self._first_match(haystack, self.exclude_keywords)
+            if hit:
+                reasons.append(f"exclude:matched:{hit}")
+                return False, reasons
 
         title_desc = f"{job.title}\n{job.description}"
-        if self.role_keywords and not contains_any(title_desc, self.role_keywords):
-            return False
+        if self.role_keywords:
+            hit = self._first_match(title_desc, self.role_keywords)
+            if not hit:
+                reasons.append("role_keywords:no_match")
+                return False, reasons
+            reasons.append(f"role_keywords:matched:{hit}")
 
-        if self.include_keywords and not contains_any(haystack, self.include_keywords):
-            return False
+        if self.include_keywords:
+            hit = self._first_match(haystack, self.include_keywords)
+            if not hit:
+                reasons.append("include_keywords:no_match")
+                return False, reasons
+            reasons.append(f"include_keywords:matched:{hit}")
 
         if self.work_mode_preference != "any" and job.work_mode != self.work_mode_preference:
-            return False
+            reasons.append(f"work_mode:mismatch:{job.work_mode}->{self.work_mode_preference}")
+            return False, reasons
 
         if is_remote_us(job.location):
-            return self.allow_remote_us
+            if not self.allow_remote_us:
+                reasons.append("remote_us:blocked")
+                return False, reasons
+            reasons.append("remote_us:allowed")
+            return True, reasons
 
-        # If preferred_states is empty -> do NOT gate by state
         if self.preferred_states:
             st = extract_us_state_code(job.location)
-            return bool(st) and (st in self.preferred_states)
+            if not st:
+                reasons.append("state:missing")
+                return False, reasons
+            if st not in self.preferred_states:
+                reasons.append(f"state:not_allowed:{st}")
+                return False, reasons
+            reasons.append(f"state:allowed:{st}")
 
-        return True
+        return True, reasons
 
 
 # =========================

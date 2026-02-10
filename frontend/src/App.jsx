@@ -5,6 +5,7 @@ import NewJobs from "./pages/NewJobs.jsx";
 import AllJobs from "./pages/AllJobs.jsx";
 import Companies from "./pages/Companies.jsx";
 import Settings from "./pages/Settings.jsx";
+import Audit from "./pages/Audit.jsx";
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
           <Route path="/all" element={<AllJobs />} />
           <Route path="/companies" element={<Companies />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/audit" element={<Audit />} />
         </Routes>
       </Layout>
     </BrowserRouter>

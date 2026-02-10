@@ -16,6 +16,7 @@ export default function Layout({ children }) {
       { to: "/new", label: "New Jobs", icon: "✨" },
       { to: "/all", label: "All Jobs", icon: "🗂️" },
       { to: "/companies", label: "Companies", icon: "🏢" },
+      { to: "/audit", label: "Audit", icon: "🧾" },
       { to: "/settings", label: "Settings", icon: "⚙️" },
     ],
     []
@@ -25,6 +26,7 @@ export default function Layout({ children }) {
     const hit = navItems.find((n) => n.to === location.pathname);
     if (hit) return hit.label;
     if (location.pathname.startsWith("/companies")) return "Companies";
+    if (location.pathname.startsWith("/audit")) return "Audit";
     if (location.pathname.startsWith("/settings")) return "Settings";
     if (location.pathname.startsWith("/new")) return "New Jobs";
     if (location.pathname.startsWith("/all")) return "All Jobs";
@@ -685,7 +687,6 @@ html[data-theme="dark"] .jw-table tr:hover td{
   display:flex;
   gap: 10px;
   align-items:center;
-  flex-wrap: wrap;
 }
 
 /* ✅ Logs: improve dark mode readability */

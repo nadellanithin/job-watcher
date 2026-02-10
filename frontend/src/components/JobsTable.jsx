@@ -222,9 +222,10 @@ export default function JobsTable({ scope, runId, settingsHash, onMetaChange }) 
                         target="_blank"
                         rel="noreferrer"
                         style={{
-                          fontWeight: 900,
+                          fontWeight: 600,
                           textDecoration: "underline",
                           textDecorationStyle: "dashed",
+                          textUnderlineOffset: "4px",
                         }}
                         title="Open job posting"
                       >

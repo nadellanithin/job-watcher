@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
-# Import your existing logic (copied as-is)
 import app.legacy.job_fetcher_legacy as legacy
 
 
@@ -37,12 +36,20 @@ def normalized_job_to_dict(j: legacy.NormalizedJob) -> Dict[str, Any]:
     }
 
 
-def fetch_jobs_via_legacy(config: Dict[str, Any]) -> tuple[List[Dict[str, Any]], Dict[str, str], List[str], List[Dict[str, Any]]]:
+def fetch_jobs_via_legacy(
+    config: Dict[str, Any],
+) -> Tuple[
+    List[Dict[str, Any]],
+    Dict[str, str],
+    List[str],
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+]:
     """
     Runs the legacy fetch + filter + H1B marking,
     but DOES NOT call legacy run_once (because it writes files + state.json). :contentReference[oaicite:3]{index=3}
     Returns:
-      kept_jobs_as_dicts, per_source_errors, h1b_load_errors, discovered_sources
+      kept_jobs_as_dicts, per_source_errors, h1b_load_errors, discovered_sources, audit_rows
     """
     # 1) Fetch raw + normalize using legacy (Greenhouse/Lever) :contentReference[oaicite:4]{index=4}
     raw_jobs, errors = legacy.fetch_all_sources(config)
@@ -78,9 +85,20 @@ def fetch_jobs_via_legacy(config: Dict[str, Any]) -> tuple[List[Dict[str, Any]],
         except Exception:
             continue
 
-    # 2) Apply the exact legacy FilterAgent logic (US-only, remote/states, keywords, visa phrases, work-mode) :contentReference[oaicite:5]{index=5}
+    # 2) Apply the exact legacy FilterAgent logic (US-only, remote/states, keywords, visa phrases, work-mode)
+    # while capturing explainable decisions per evaluated job.
     filter_agent = legacy.FilterAgent(config)
-    kept = [j for j in raw_jobs if filter_agent.keep(j)]
+
+    audit_rows: List[Dict[str, Any]] = []
+    kept: List[legacy.NormalizedJob] = []
+    for j in raw_jobs:
+        keep, reasons = filter_agent.explain(j)
+        if keep:
+            kept.append(j)
+        d = normalized_job_to_dict(j)
+        d["_audit_included"] = 1 if keep else 0
+        d["_audit_reasons"] = reasons
+        audit_rows.append(d)
 
     # 3) Load H1B agent using legacy (downloads/caches USCIS export CSVs) :contentReference[oaicite:6]{index=6}
     years = config.get("uscis_h1b_years") or []
@@ -100,4 +118,4 @@ def fetch_jobs_via_legacy(config: Dict[str, Any]) -> tuple[List[Dict[str, Any]],
     for d, j in zip(kept_dicts, kept):
         d["past_h1b_support"] = j.past_h1b_support
 
-    return kept_dicts, errors, h1b_agent.load_errors, discovered
+    return kept_dicts, errors, h1b_agent.load_errors, discovered, audit_rows
