@@ -28,7 +28,8 @@ DEFAULT_SETTINGS = {
     # rescue: can include borderline/no-signal jobs (guarded; implemented later)
     "ml_enabled": False,
     "ml_mode": "rank_only",  # rank_only|rescue
-    "ml_rescue_threshold": 0.85,
+    "ml_rescue_threshold": 0.92,
+    "ml_min_samples": 30,
 }
 
 def get_settings(con, user_id: str) -> Dict[str, Any]:

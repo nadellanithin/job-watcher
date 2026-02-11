@@ -290,10 +290,11 @@ export default function Settings() {
   ];
 
   const feedbackCounts = feedbackStats?.counts || {};
-  const mlPositiveCount = Number(feedbackCounts.include || 0) + Number(feedbackCounts.applied || 0);
+  const mlPositiveCount = Number(feedbackCounts.include || 0);
   const mlNegativeCount = Number(feedbackCounts.exclude || 0) + Number(feedbackCounts.ignore || 0);
   const mlLabelTotal = mlPositiveCount + mlNegativeCount;
-  const mlEligible = mlLabelTotal >= 20 && mlPositiveCount > 0 && mlNegativeCount > 0;
+  const mlMinSamples = Number(draft.ml_min_samples ?? 30);
+  const mlEligible = mlLabelTotal >= mlMinSamples && mlPositiveCount > 0 && mlNegativeCount > 0;
   const mlToggleDisabled = feedbackStatsLoading || (!mlEligible && !draft.ml_enabled);
   const mlConfigDisabled = mlToggleDisabled || !draft.ml_enabled;
   const showRescueThreshold = !mlConfigDisabled && (draft.ml_mode || "rank_only") === "rescue";
@@ -528,8 +529,22 @@ export default function Settings() {
                   {feedbackStatsLoading
                     ? "Checking feedback coverage..."
                     : mlEligible
-                    ? `Ready: ${mlLabelTotal} labels (${mlPositiveCount} positive, ${mlNegativeCount} negative).`
-                    : `Requires at least 20 labels with both positive and negative feedback. Current: ${mlLabelTotal} labels (${mlPositiveCount} positive, ${mlNegativeCount} negative).`}
+                    ? `Ready: ${mlLabelTotal} labels (${mlPositiveCount} include, ${mlNegativeCount} exclude/ignore).`
+                    : `Requires at least ${mlMinSamples} labels with at least 1 include and 1 exclude/ignore. Current: ${mlLabelTotal} labels (${mlPositiveCount} include, ${mlNegativeCount} exclude/ignore).`}
+                </div>
+              </FieldRow>
+
+              <FieldRow label="Min training samples" help="Default 30">
+                <input
+                  className="jw-input"
+                  type="number"
+                  min={10}
+                  step="1"
+                  value={draft.ml_min_samples ?? 30}
+                  onChange={(e) => patch("ml_min_samples", Number(e.target.value))}
+                />
+                <div className="jw-help" style={{ marginTop: 6 }}>
+                  ML will only train when total feedback labels meet this count and you have at least 1 include and 1 exclude/ignore.
                 </div>
               </FieldRow>
 
@@ -547,19 +562,19 @@ export default function Settings() {
               </FieldRow>
 
               {showRescueThreshold ? (
-                <FieldRow label="Rescue threshold" help="Typical 0.75 to 0.90">
+                <FieldRow label="Rescue threshold" help="Typical 0.92 to 0.95">
                   <input
                     className="jw-input"
                     type="number"
                     step="0.01"
                     min={0}
                     max={1}
-                    value={draft.ml_rescue_threshold ?? 0.85}
+                    value={draft.ml_rescue_threshold ?? 0.92}
                     onChange={(e) => patch("ml_rescue_threshold", Number(e.target.value))}
                     disabled={mlConfigDisabled}
                   />
                   <div className="jw-help" style={{ marginTop: 6 }}>
-                    Jobs below your threshold can still be rescued when ML relevance exceeds this value. Higher threshold rescues fewer jobs.
+                    In Rescue mode, excluded jobs can be flipped to Included only when ml_prob is at or above this threshold. Higher rescues fewer jobs (safer).
                   </div>
                 </FieldRow>
               ) : null}

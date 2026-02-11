@@ -227,6 +227,46 @@ class MLRelevance:
 
         return True, {"model_id": model_id, **meta.__dict__}
 
+
+    def score_audit_rows(self, audit_rows: List[Dict[str, object]]) -> Dict[str, float]:
+        """Score a list of audit/job dicts (this run's evaluated jobs).
+
+        Returns mapping dedupe_key -> ml_prob.
+        Does NOT write to DB.
+        """
+        if not _ML_DEPS_OK:
+            return {}
+
+        loaded = self.load()
+        if not loaded:
+            return {}
+
+        vec, clf, _meta = loaded
+
+        keys: List[str] = []
+        texts: List[str] = []
+        for r in audit_rows or []:
+            dk = str(r.get("dedupe_key") or "")
+            if not dk:
+                continue
+            text = " ".join(
+                [
+                    str(r.get("title") or ""),
+                    str(r.get("department") or ""),
+                    str(r.get("team") or ""),
+                    str(r.get("description") or ""),
+                ]
+            )
+            keys.append(dk)
+            texts.append(text)
+
+        if not keys:
+            return {}
+
+        X = vec.transform(texts)
+        probs = clf.predict_proba(X)[:, 1]
+        return {dk: float(p) for dk, p in zip(keys, probs)}
+
     def score_jobs_latest(self, con) -> Dict[str, object]:
         if not _ML_DEPS_OK:
             return {"ok": False, "reason": "deps_missing", "missing": _ML_DEPS_MISSING}
