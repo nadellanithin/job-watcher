@@ -42,3 +42,6 @@ data/
 
 # Playwright
 playwright/.cache/
+
+backend/.data/
+*.joblib
