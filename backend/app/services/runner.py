@@ -48,6 +48,17 @@ class RunnerService:
             settings = get_settings(self.con, user_id)
 
             ml_enabled = bool(settings.get("ml_enabled"))
+            ml_mode = (settings.get("ml_mode") or "rank_only").strip().lower()
+            if ml_mode not in ("rank_only", "rescue"):
+                ml_mode = "rank_only"
+            try:
+                ml_rescue_threshold = float(settings.get("ml_rescue_threshold") if settings.get("ml_rescue_threshold") is not None else 0.92)
+            except Exception:
+                ml_rescue_threshold = 0.92
+            try:
+                ml_min_samples = int(settings.get("ml_min_samples") if settings.get("ml_min_samples") is not None else 30)
+            except Exception:
+                ml_min_samples = 30
 
             # Stable fingerprint of settings that drove this run.
             settings_hash = hashlib.sha256(
@@ -154,6 +165,82 @@ class RunnerService:
                     reasons.append("override:force_exclude")
                 row["_audit_reasons"] = reasons
 
+            
+            # === Phase 2.6 Local ML (free): add ml_prob to audit + optional rescue ===
+            ml_info = {"enabled": ml_enabled, "mode": ml_mode}
+
+            if ml_enabled:
+                try:
+                    ml = MLRelevance(data_dir="./.data")
+
+                    # Train if enough labels (latest label per job). Training may be skipped.
+                    trained, train_info = ml.train_from_db(
+                        self.con,
+                        min_total=ml_min_samples,
+                        min_pos=max(3, int(0.15 * ml_min_samples)),
+                        min_neg=max(3, int(0.15 * ml_min_samples)),
+                    )
+                    ml_info["train"] = {"trained": bool(trained), **(train_info or {})}
+
+                    loaded = ml.load()
+                    if not loaded:
+                        # deps missing / no model / other failure — keep app running.
+                        reason = (train_info or {}).get("reason") or "no_model"
+                        ml_info["available"] = False
+                        ml_info["reason"] = reason
+                        for r in audit_rows:
+                            reasons = list(r.get("_audit_reasons") or [])
+                            # Put the reason in audit for visibility without breaking anything.
+                            reasons.append(f"ml:unavailable:{reason}")
+                            r["_audit_reasons"] = reasons
+                    else:
+                        ml_info["available"] = True
+
+                        # Predict proba on *this run's evaluated jobs* (includes excluded rows too).
+                        probs = ml.score_audit_rows(audit_rows)
+
+                        hard_prefixes = (
+                            "location:",
+                            "work_mode:",
+                            "remote_us:",
+                            "state:",
+                            "visa_restriction:",
+                        )
+
+                        rescued = 0
+                        for r in audit_rows:
+                            dk = r.get("dedupe_key")
+                            p = probs.get(dk)
+                            if p is None:
+                                continue
+
+                            reasons = list(r.get("_audit_reasons") or [])
+                            reasons.append(f"ml:prob:{p:.3f}")
+
+                            # Rescue mode: flip only if NO hard gate reasons exist.
+                            if ml_mode == "rescue" and int(r.get("_audit_included") or 0) == 0:
+                                has_hard_gate = any(
+                                    any(str(reason).startswith(pref) for pref in hard_prefixes)
+                                    for reason in reasons
+                                )
+                                if (not has_hard_gate) and float(p) >= float(ml_rescue_threshold):
+                                    r["_audit_included"] = 1
+                                    reasons.append("ml:rescued")
+                                    rescued += 1
+
+                            r["_audit_reasons"] = reasons
+
+                        ml_info["rescued"] = rescued
+
+                except Exception as e:
+                    # Never crash the run because ML is optional.
+                    ml_info = {"enabled": True, "available": False, "error": str(e)}
+                    for r in audit_rows:
+                        reasons = list(r.get("_audit_reasons") or [])
+                        reasons.append("ml:unavailable:error")
+                        r["_audit_reasons"] = reasons
+
+            # Final kept list after overrides (+ optional ML rescue)
             final_kept = [r for r in audit_rows if int(r.get("_audit_included") or 0) == 1]
 
             # Persist ATS discoveries (optional upgrade path: career_url -> greenhouse/lever)
@@ -315,6 +402,17 @@ class RunnerService:
                 ],
             )
 
+            # === Update job_ml_scores for ordering in Jobs screens ===
+            if ml_enabled:
+                try:
+                    ml = MLRelevance(data_dir="./.data")
+                    score_info = ml.score_jobs_latest(self.con)
+                    if isinstance(ml_info, dict):
+                        ml_info["score"] = score_info
+                except Exception as e:
+                    if isinstance(ml_info, dict):
+                        ml_info["score_error"] = str(e)
+
             # Sort (H1B first, then first_seen)
             current.sort(
                 key=lambda x: (0 if x.get("past_h1b_support") == "yes" else 1, x.get("first_seen", ""))
@@ -329,26 +427,7 @@ class RunnerService:
             write_json("./new_jobs.json", new)
             write_csv("./new_jobs.csv", new)
 
-            # === Optional: local ML scoring (rank_only/rescue in later phase) ===
-            ml_info = None
-            if ml_enabled:
-                try:
-                    ml = MLRelevance("./.data")
-                    trained, info = ml.train_from_db(self.con)
-                    # Train may be skipped if not enough labels or already trained.
-                    # We still try to score with an existing model.
-                    score_info = ml.score_jobs_latest(self.con)
-                    ml_info = {
-                        "trained": bool(trained),
-                        "train_info": info,
-                        "score_info": score_info,
-                    }
-                    print(f"[ml] {ml_info}")
-                except Exception as e:
-                    ml_info = {"trained": False, "error": str(e)}
-                    print(f"[ml] failed err={e}")
-
-        finished = now_utc_iso()
+            finished = now_utc_iso()
 
         logs = _truncate(buf.getvalue(), max_chars=20000)
 
