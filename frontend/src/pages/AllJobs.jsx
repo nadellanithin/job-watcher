@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiGet } from "../api/client";
 import JobsTable from "../components/JobsTable";
+import Icon from "../components/Icon.jsx";
+import SelectMenu from "../components/SelectMenu.jsx";
 
 function fmtLocal(iso) {
   if (!iso) return "";
@@ -19,7 +21,7 @@ function take(arr, n = 12) {
 }
 
 export default function AllJobs() {
-  const [view, setView] = useState("settings"); // settings|all
+  const [view, setView] = useState("settings");
   const [groups, setGroups] = useState([]);
   const [selectedHash, setSelectedHash] = useState("");
   const [meta, setMeta] = useState({ total: 0, page: 1, pageSize: 25 });
@@ -42,9 +44,7 @@ export default function AllJobs() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const selectedGroup = useMemo(() => {
-    return groups.find((g) => g.settings_hash === selectedHash) || null;
-  }, [groups, selectedHash]);
+  const selectedGroup = useMemo(() => groups.find((g) => g.settings_hash === selectedHash) || null, [groups, selectedHash]);
 
   useEffect(() => {
     if (view !== "settings") {
@@ -91,92 +91,54 @@ export default function AllJobs() {
   const settingsHash = view === "all" ? undefined : selectedHash;
 
   return (
-    <div style={{ display: "grid", gap: 14 }}>
-      <div className="jw-card" style={{ background: "var(--surface2)" }}>
-        <div
-          className="jw-card-b"
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 12,
-            alignItems: "center",
-            flexWrap: "wrap",
-            paddingTop: 12,
-            paddingBottom: 12,
-          }}
-        >
-          <div style={{ minWidth: 260 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span className="jw-badge subtle">🗂️ All Jobs</span>
-              <span className="jw-badge subtle">{meta.total || 0} jobs</span>
-              {view === "settings" ? (
-                <span className="jw-badge ok">Settings-group view</span>
-              ) : (
-                <span className="jw-badge subtle">All time</span>
-              )}
-            </div>
-
-            <div className="jw-muted2" style={{ marginTop: 8, fontSize: 12 }}>
-              {view === "settings" ? (
-                selectedGroup ? (
-                  <>
-                    Showing union for: <b>{selectedGroup.label}</b> • last run:{" "}
-                    <b>{fmtLocal(selectedGroup.last_run_started_at)}</b> • runs in group:{" "}
-                    <b>{selectedGroup.run_count}</b> • hash <b>{shortHash(selectedGroup.settings_hash)}</b>
-                  </>
-                ) : (
-                  <>Select a settings group to view its union.</>
-                )
-              ) : (
-                <>Historical archive (all unique jobs ever seen, across all settings).</>
-              )}
-            </div>
+    <div className="jw-page-shell jw-alljobs-page">
+      <div className="jw-page-hero">
+        <div className="jw-page-hero-main">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span className="jw-badge subtle">
+              <Icon name="list" size={13} /> All Jobs
+            </span>
+            <span className="jw-badge subtle">{meta.total || 0} jobs</span>
+            {view === "settings" ? <span className="jw-badge ok">Settings group</span> : <span className="jw-badge subtle">All time</span>}
           </div>
+          <h1 className="jw-page-hero-title">Historical job archive</h1>
+          <p className="jw-page-hero-sub">
+            {view === "settings"
+              ? selectedGroup
+                ? `Showing union for ${selectedGroup.label}. Last run ${fmtLocal(selectedGroup.last_run_started_at)}.`
+                : "Select a settings group to view its union."
+              : "All unique jobs seen across all runs and settings."}
+          </p>
+        </div>
 
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <button
-                type="button"
-                className={`jw-btn small ${view === "settings" ? "" : "ghost"}`}
-                onClick={() => setView("settings")}
-              >
-                Settings group
-              </button>
-              <button
-                type="button"
-                className={`jw-btn small ${view === "all" ? "" : "ghost"}`}
-                onClick={() => setView("all")}
-              >
-                All time
-              </button>
-            </div>
+        <div className="jw-toolbar" style={{ gap: 8, flexWrap: "wrap", alignItems: "stretch" }}>
+          <button type="button" className={`jw-btn small ${view === "settings" ? "" : "ghost"}`} onClick={() => setView("settings")}>
+            Settings group
+          </button>
+          <button type="button" className={`jw-btn small ${view === "all" ? "" : "ghost"}`} onClick={() => setView("all")}>
+            All time
+          </button>
 
-            {view === "settings" ? (
-              <select
-                className="jw-select"
+          {view === "settings" ? (
+            <div style={{ minWidth: 300, width: "min(560px, 92vw)" }}>
+              <SelectMenu
                 value={selectedHash || ""}
-                onChange={(e) => setSelectedHash(e.target.value)}
-                style={{ minWidth: 520, maxWidth: "min(600px, 90vw)" }}
-                title="Choose a settings group (union across runs with the same saved filters)"
-              >
-                {groups.length ? null : <option value="">No runs yet</option>}
-                {groups.map((g) => (
-                  <option key={g.settings_hash} value={g.settings_hash}>
-                    {g.label} — {fmtLocal(g.last_run_started_at)}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-          </div>
+                onChange={setSelectedHash}
+                options={
+                  groups.length
+                    ? groups.map((g) => ({ value: g.settings_hash, label: `${g.label} - ${fmtLocal(g.last_run_started_at)}` }))
+                    : [{ value: "", label: "No runs yet" }]
+                }
+                ariaLabel="Settings group"
+              />
+            </div>
+          ) : null}
         </div>
       </div>
 
       {view === "settings" ? (
         <div className="jw-card">
-          <div
-            className="jw-card-h"
-            style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}
-          >
+          <div className="jw-card-h" style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
             <div>
               <div className="jw-card-title">Filters used for this settings group</div>
               <div className="jw-muted2" style={{ marginTop: 6, fontSize: 12 }}>
@@ -185,7 +147,7 @@ export default function AllJobs() {
             </div>
 
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              {receiptLoading ? <span className="jw-badge subtle">Loading…</span> : null}
+              {receiptLoading ? <span className="jw-badge subtle">Loading...</span> : null}
               {selectedHash ? (
                 <span className="jw-badge subtle">
                   hash <b>{shortHash(selectedHash)}</b>
@@ -210,16 +172,16 @@ export default function AllJobs() {
               <>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                   <span className="jw-badge subtle">
-                    us_only: <b>{String(!!receipt.parsed.us_only)}</b>
+                    US only: <b>{String(!!receipt.parsed.us_only)}</b>
                   </span>
                   <span className="jw-badge subtle">
-                    remote_us: <b>{String(!!receipt.parsed.allow_remote_us)}</b>
+                    Remote US: <b>{String(!!receipt.parsed.allow_remote_us)}</b>
                   </span>
                   <span className="jw-badge subtle">
-                    work_mode: <b>{receipt.parsed.work_mode || "any"}</b>
+                    Work mode: <b>{receipt.parsed.work_mode || "any"}</b>
                   </span>
                   <span className="jw-badge subtle">
-                    states: <b>{(receipt.parsed.preferred_states || []).length}</b>
+                    States: <b>{(receipt.parsed.preferred_states || []).length}</b>
                   </span>
                   <span className="jw-badge subtle">
                     H1B years: <b>{(receipt.parsed.uscis_h1b_years || []).length}</b>
@@ -238,7 +200,7 @@ export default function AllJobs() {
                               {k}
                             </span>
                           ))
-                        : <span className="jw-muted">—</span>}
+                        : <span className="jw-muted">-</span>}
                     </div>
                   </div>
 
@@ -253,7 +215,7 @@ export default function AllJobs() {
                               {k}
                             </span>
                           ))
-                        : <span className="jw-muted">—</span>}
+                        : <span className="jw-muted">-</span>}
                     </div>
                   </div>
                 </div>
@@ -270,7 +232,7 @@ export default function AllJobs() {
                               {k}
                             </span>
                           ))
-                        : <span className="jw-muted">—</span>}
+                        : <span className="jw-muted">-</span>}
                     </div>
                   </div>
 
@@ -285,13 +247,13 @@ export default function AllJobs() {
                               {k}
                             </span>
                           ))
-                        : <span className="jw-muted">—</span>}
+                        : <span className="jw-muted">-</span>}
                     </div>
                   </div>
                 </div>
 
                 <details>
-                  <summary style={{ cursor: "pointer", fontWeight: 900 }}>View full settings JSON</summary>
+                  <summary style={{ cursor: "pointer", fontWeight: 600 }}>View full settings JSON</summary>
                   <pre className="jw-log" style={{ marginTop: 10, whiteSpace: "pre-wrap" }}>
                     {JSON.stringify(receipt.parsed, null, 2)}
                   </pre>
@@ -305,8 +267,16 @@ export default function AllJobs() {
       <JobsTable scope={scope} settingsHash={settingsHash} onMetaChange={setMeta} />
 
       <div className="jw-muted2" style={{ fontSize: 12 }}>
-        H-1B badge is a historical signal (USCIS data) — not a guarantee.
+        H-1B badge is a historical signal from USCIS data and is not a guarantee.
       </div>
+
+      <style>{`
+        .jw-alljobs-page .jw-page-hero{
+          overflow-x: clip;
+          overflow-y: visible;
+        }
+      `}</style>
     </div>
   );
 }
+

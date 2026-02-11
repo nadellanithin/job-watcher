@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPost } from "../api/client";
+import Icon from "../components/Icon.jsx";
 
 function formatLocal(iso) {
   if (!iso) return "—";
@@ -198,11 +199,10 @@ export default function Dashboard() {
     : "—";
 
   return (
-    <div style={{ display: "grid", gap: 14 }}>
-      {/* Hero */}
-      <div className="jw-card" style={{ background: "var(--surface2)" }}>
+    <div className="jw-page-shell">
+      <div className="jw-page-hero">
         <div
-          className="jw-card-b"
+          className="jw-pagebar"
           style={{
             display: "flex",
             justifyContent: "space-between",
@@ -211,36 +211,39 @@ export default function Dashboard() {
             alignItems: "center",
             paddingTop: 12,
             paddingBottom: 12,
+            width: "100%",
           }}
         >
-          <div style={{ minWidth: 320 }}>
+          <div>
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <span className="jw-badge subtle">📊 Dashboard</span>
+              <span className="jw-badge subtle">
+                <Icon name="dashboard" size={13} /> Dashboard
+              </span>
               {schedEnabled ? (
-                <span className="jw-badge ok">Scheduler: Enabled</span>
+                <span className="jw-badge ok">Scheduler enabled</span>
               ) : (
-                <span className="jw-badge warn">Scheduler: Disabled</span>
+                <span className="jw-badge warn">Scheduler disabled</span>
               )}
               <span className="jw-badge subtle">
-                Runs: <b style={{ marginLeft: 6 }}>{schedEnabled ? schedRunCount : 0}</b>
+                Runs <b style={{ marginLeft: 6 }}>{schedEnabled ? schedRunCount : 0}</b>
               </span>
             </div>
 
-            <div style={{ marginTop: 10, fontSize: 22, fontWeight: 1000 }}>
+            <h1 className="jw-page-hero-title" style={{ marginTop: 10 }}>
               Monitor runs, logs, and job freshness
-            </div>
-            <div className="jw-muted2" style={{ marginTop: 6 }}>
+            </h1>
+            <p className="jw-page-hero-sub" style={{ marginTop: 6 }}>
               Run the fetcher, check errors quickly, and validate if Playwright is needed for any company.
-            </div>
+            </p>
           </div>
 
           <div className="jw-toolbar" style={{ alignItems: "center" }}>
             <button className="jw-btn" onClick={refreshAll} disabled={loading || runningNow} type="button">
-              {loading ? "Refreshing…" : "Refresh"}
+              <Icon name="refresh" size={13} /> {loading ? "Refreshing..." : "Refresh"}
             </button>
 
             <button className="jw-btn primary" onClick={runNow} disabled={runningNow} type="button">
-              {runningNow ? "Running…" : "Run now"}
+              <Icon name="play" size={13} /> {runningNow ? "Running..." : "Run now"}
             </button>
           </div>
         </div>
@@ -264,7 +267,7 @@ export default function Dashboard() {
           </div>
           <div className="jw-card-b">
             <span className="jw-pill" title={lastRun?.finished_at ? formatLocal(lastRun.finished_at) : ""}>
-              <span style={{ fontWeight: 900 }}>{`Last run ${lastRunText}`}</span>
+              <span style={{ fontWeight: 600 }}>{`Last run ${lastRunText}`}</span>
             </span>
 
             <div className="jw-toolbar" style={{ marginTop: 10 }}>
@@ -319,38 +322,49 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Logs */}
-      <div className="jw-card">
-        <div
-          className="jw-card-h"
+      {/* Logs (collapsible) */}
+      <details className="jw-card" style={{ overflow: "hidden" }}>
+        <summary
           style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 10,
-            flexWrap: "wrap",
+            cursor: "pointer",
+            listStyle: "none",
           }}
         >
-          <div>
-            <div className="jw-card-title">Latest run logs</div>
-            <div className="jw-muted2" style={{ marginTop: 4, fontSize: 12 }}>
-              Search within logs to quickly spot “0 jobs”, pagination, or blocked pages.
+          <div
+            className="jw-card-h"
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 10,
+              flexWrap: "wrap",
+              paddingBottom: 14,
+            }}
+          >
+            <div>
+              <div className="jw-card-title" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                Latest logs
+                <span className="jw-badge subtle">{derivedLogs ? derivedLogs.split("\n").length : 0} lines</span>
+              </div>
+              <div className="jw-muted2" style={{ marginTop: 6, fontSize: 12 }}>
+                Logs are collapsed by default so the page stays calm.
+              </div>
+            </div>
+
+            <div className="jw-toolbar" onClick={(e) => e.preventDefault()}>
+              <input
+                className="jw-input"
+                style={{ minWidth: 220 }}
+                value={logQuery}
+                onChange={(e) => setLogQuery(e.target.value)}
+                placeholder="search logs…"
+              />
+              <button className="jw-btn small" onClick={() => copyLogs(derivedLogs)} disabled={!derivedLogs} type="button">
+                Copy
+              </button>
             </div>
           </div>
-
-          <div className="jw-toolbar">
-            <input
-              className="jw-input"
-              style={{ minWidth: 240 }}
-              value={logQuery}
-              onChange={(e) => setLogQuery(e.target.value)}
-              placeholder="filter logs…"
-            />
-            <button className="jw-btn small" onClick={() => copyLogs(derivedLogs)} disabled={!derivedLogs} type="button">
-              Copy
-            </button>
-          </div>
-        </div>
+        </summary>
 
         <div className="jw-card-b">
           {derivedLogs ? (
@@ -360,15 +374,13 @@ export default function Dashboard() {
               No logs yet. Click <b>Run now</b> to fetch jobs and see output.
             </div>
           )}
-
-          <div className="jw-muted2" style={{ marginTop: 10, fontSize: 12 }}>
-            Tip: If a career page is JS-rendered, set its mode to <b>playwright</b> (requires backend env{" "}
-            <b>CAREERURL_PLAYWRIGHT=1</b>).
+          <div className="jw-help" style={{ marginTop: 10 }}>
+            Tip: If a career page is JS-rendered, set its mode to <b>playwright</b> (requires backend env <b>CAREERURL_PLAYWRIGHT=1</b>).
           </div>
         </div>
-      </div>
+      </details>
 
-      {/* Recent runs */}
+{/* Recent runs */}
       <div className="jw-card">
         <div
           className="jw-card-h"
@@ -448,7 +460,7 @@ export default function Dashboard() {
 
                     return (
                       <tr key={r.run_id}>
-                        <td style={{ fontWeight: 900 }}>{r.run_id}</td>
+                        <td style={{ fontWeight: 600 }}>{r.run_id}</td>
                         <td className="jw-muted">{formatLocal(r.started_at)}</td>
                         <td className="jw-muted">{formatLocal(r.finished_at)}</td>
                         <td>{st?.fetched ?? "—"}</td>
@@ -546,7 +558,7 @@ export default function Dashboard() {
               ) : settingsModalSettings?.settings ? (
                 <>
                   <details>
-                    <summary style={{ cursor: "pointer", fontWeight: 900 }}>View full settings JSON</summary>
+                    <summary style={{ cursor: "pointer", fontWeight: 600 }}>View full settings JSON</summary>
                     <pre className="jw-log" style={{ marginTop: 10, whiteSpace: "pre-wrap" }}>
                       {JSON.stringify(settingsModalSettings.settings, null, 2)}
                     </pre>

@@ -1,5 +1,9 @@
+/* eslint-disable react-hooks/set-state-in-effect */
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { apiGet } from "../api/client";
+import Icon from "../components/Icon.jsx";
+import SelectMenu from "../components/SelectMenu.jsx";
 
 async function apiPut(path, body) {
   const res = await fetch(path, {
@@ -14,23 +18,66 @@ async function apiPut(path, body) {
   return res.json();
 }
 
+function Section({ id, title, subtitle, children }) {
+  return (
+    <section id={id} className="jw-card">
+      <div className="jw-card-b" style={{ display: "grid", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>{title}</div>
+          {subtitle ? (
+            <div className="jw-help" style={{ marginTop: 6 }}>
+              {subtitle}
+            </div>
+          ) : null}
+        </div>
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function FieldRow({ label, help, children }) {
+  return (
+    <div>
+      <div
+        className="jw-label"
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}
+      >
+        <span>{label}</span>
+        {help ? <span className="jw-help">{help}</span> : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function ChipInput({ label, help, value, onChange, placeholder }) {
   const [draft, setDraft] = useState("");
+  const [editorOpen, setEditorOpen] = useState(false);
 
-  const add = (raw) => {
+  const chips = Array.isArray(value) ? value : [];
+  const hasOverflow = chips.length > 4;
+  const overflowCount = Math.max(0, chips.length - 4);
+  const preview = chips.slice(0, 4);
+
+  useEffect(() => {
+    if (chips.length <= 4) setEditorOpen(false);
+  }, [chips.length]);
+
+  const addItems = (raw, openEditor = false) => {
     const items = String(raw || "")
       .split(/[\n,]+/)
       .map((s) => s.trim())
       .filter(Boolean);
-
     if (!items.length) return;
-
-    const next = Array.from(new Set([...(value || []), ...items]));
+    const next = Array.from(new Set([...chips, ...items]));
     onChange(next);
+    setDraft("");
+    if (openEditor) setEditorOpen(true);
   };
 
   const removeAt = (idx) => {
-    const next = [...(value || [])];
+    const next = [...chips];
     next.splice(idx, 1);
     onChange(next);
   };
@@ -38,714 +85,650 @@ function ChipInput({ label, help, value, onChange, placeholder }) {
   const onKeyDown = (e) => {
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
-      add(draft);
-      setDraft("");
+      addItems(draft);
       return;
     }
-    if (e.key === "Backspace" && !draft && (value || []).length) {
-      removeAt((value || []).length - 1);
+    if (e.key === "Backspace" && !draft && chips.length) {
+      removeAt(chips.length - 1);
+    }
+  };
+
+  const onEditorKeyDown = (e) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      addItems(draft, true);
     }
   };
 
   const onPaste = (e) => {
-    const text = e.clipboardData.getData("text");
+    const text = e.clipboardData?.getData("text");
     if (text && /[\n,]/.test(text)) {
       e.preventDefault();
-      add(text);
-      setDraft("");
+      addItems(text, hasOverflow || editorOpen);
     }
   };
 
-  return (
-    <div style={{ display: "grid", gap: 8 }}>
-      <div className="jw-label">
-        <span>{label}</span>
-        {help ? <span className="jw-help">{help}</span> : null}
-      </div>
+  const modalNode = typeof document !== "undefined" ? document.body : null;
 
-      <div
-        style={{
-          border: "1px solid var(--border)",
-          borderRadius: 12,
-          padding: 10,
-          background: "var(--surface2)",
-          display: "grid",
-          gap: 10,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            flexWrap: "wrap",
-            alignItems: "center",
-            maxHeight: 104,
-            overflowY: "auto",
-            paddingRight: 4,
-          }}
-        >
-          {(value || []).map((chip, idx) => (
-            <span
-              key={`${chip}-${idx}`}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "6px 10px",
-                borderRadius: 999,
-                background: "rgba(255,255,255,0.10)",
-                border: "1px solid var(--border)",
-                fontWeight: 800,
-                color: "var(--text)",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {chip}
-              <button
-                className="jw-iconbtn"
-                style={{ padding: "2px 8px", borderRadius: 999 }}
-                onClick={() => removeAt(idx)}
-                aria-label={`Remove ${chip}`}
-                type="button"
-              >
-                ✕
+  return (
+    <>
+      <FieldRow label={label} help={help}>
+        <div className="jw-chip-field">
+          <div className="jw-chip-rail">
+            {preview.map((x, i) => (
+              <span key={`${x}-${i}`} className="jw-chip">
+                <span>{x}</span>
+                <button
+                  className="jw-chip-remove"
+                  type="button"
+                  onClick={() => removeAt(i)}
+                  aria-label={`Remove ${x}`}
+                >
+                  x
+                </button>
+              </span>
+            ))}
+
+            {hasOverflow ? (
+              <button className="jw-chip-more" type="button" onClick={() => setEditorOpen(true)}>
+                +{overflowCount} more...
               </button>
-            </span>
-          ))}
+            ) : null}
+          </div>
+
+          <div className="jw-chip-main-controls">
+            <input
+              className="jw-input"
+              value={draft}
+              placeholder={placeholder || "Type and press Enter"}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={onKeyDown}
+              onPaste={onPaste}
+            />
+            <button className="jw-btn small" type="button" onClick={() => addItems(draft)}>
+              Add
+            </button>
+            {chips.length ? (
+              <button className="jw-btn ghost small" type="button" onClick={() => removeAt(chips.length - 1)}>
+                Remove last
+              </button>
+            ) : null}
+          </div>
+
+          {hasOverflow ? (
+            <div className="jw-help">Continue adding/removing here or use +{overflowCount} more... for full list.</div>
+          ) : null}
         </div>
+      </FieldRow>
 
-        <div className="jw-toolbar">
-          <input
-            className="jw-input"
-            style={{ flex: "1 1 240px" }}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKeyDown}
-            onPaste={onPaste}
-            placeholder={placeholder || "Type and press Enter…"}
-          />
-
-          <button
-            className="jw-btn small"
-            type="button"
-            onClick={() => {
-              add(draft);
-              setDraft("");
-            }}
-            disabled={!draft.trim()}
-          >
-            Add
-          </button>
-        </div>
-      </div>
-
-      <div className="jw-muted2" style={{ fontSize: 12 }}>
-        Tip: paste a comma/newline list to add multiple at once.
-      </div>
-    </div>
-  );
-}
-
-function Section({ title, subtitle, children, right }) {
-  return (
-    <div className="jw-card">
-      <div className="jw-card-h" style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <div>
-          <div className="jw-card-title">{title}</div>
-          {subtitle ? <div className="jw-muted2" style={{ marginTop: 6, fontSize: 12 }}>{subtitle}</div> : null}
-        </div>
-        {right ? <div>{right}</div> : null}
-      </div>
-      <div className="jw-card-b">{children}</div>
-    </div>
+      {editorOpen && modalNode
+        ? createPortal(
+            <>
+              <div className="jw-modal-overlay open" onClick={() => setEditorOpen(false)} />
+              <div className="jw-modal open" role="dialog" aria-modal="true" aria-label={`${label} editor`}>
+                <div className="jw-modal-panel" onClick={(e) => e.stopPropagation()}>
+                  <div className="jw-modal-h">
+                    <div>
+                      <div className="jw-modal-title">{label}</div>
+                      <div className="jw-modal-sub">Add or remove values. Changes apply immediately.</div>
+                    </div>
+                    <button className="jw-btn small" type="button" onClick={() => setEditorOpen(false)}>
+                      Close
+                    </button>
+                  </div>
+                  <div className="jw-modal-b" style={{ display: "grid", gap: 12 }}>
+                    <div className="jw-chip-modal-list">
+                      {chips.length ? (
+                        chips.map((x, i) => (
+                          <span key={`${x}-${i}`} className="jw-chip">
+                            <span>{x}</span>
+                            <button
+                              className="jw-chip-remove"
+                              type="button"
+                              onClick={() => removeAt(i)}
+                              aria-label={`Remove ${x}`}
+                            >
+                              x
+                            </button>
+                          </span>
+                        ))
+                      ) : (
+                        <div className="jw-empty">No values yet.</div>
+                      )}
+                    </div>
+                    <div className="jw-chip-editor-row">
+                      <input
+                        className="jw-input"
+                        value={draft}
+                        placeholder={placeholder || "Type and press Enter"}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onKeyDown={onEditorKeyDown}
+                        onPaste={onPaste}
+                      />
+                      <button className="jw-btn primary" type="button" onClick={() => addItems(draft, true)}>
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>,
+            modalNode
+          )
+        : null}
+    </>
   );
 }
 
 export default function Settings() {
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
+  const [feedbackStats, setFeedbackStats] = useState({ counts: {} });
+  const [feedbackStatsLoading, setFeedbackStatsLoading] = useState(true);
 
-  const [roleKeywords, setRoleKeywords] = useState([]);
-  const [includeKeywords, setIncludeKeywords] = useState([]);
-  const [excludeKeywords, setExcludeKeywords] = useState([]);
-  const [visaPhrases, setVisaPhrases] = useState([]);
-  const [excludeExceptions, setExcludeExceptions] = useState([]);
+  const [saved, setSaved] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [active, setActive] = useState("targets");
 
-  const [filterMode, setFilterMode] = useState("smart");
-  const [minScoreToInclude, setMinScoreToInclude] = useState(3);
-
-  const [usOnly, setUsOnly] = useState(true);
-  const [allowRemoteUs, setAllowRemoteUs] = useState(true);
-  const [preferredStates, setPreferredStates] = useState([]);
-  const [workMode, setWorkMode] = useState("any");
-
-  // Local ML relevance
-  const [mlEnabled, setMlEnabled] = useState(false);
-  const [mlMode, setMlMode] = useState("rank_only");
-  const [mlRescueThreshold, setMlRescueThreshold] = useState(0.85);
-
-  const [h1bYears, setH1bYears] = useState([]);
-  const [h1bCacheDir, setH1bCacheDir] = useState("./.cache/uscis_h1b");
-
-
-  const [feedbackStats, setFeedbackStats] = useState(null);
-  const [feedbackStatsErr, setFeedbackStatsErr] = useState("");
-  const [mlGuardMsg, setMlGuardMsg] = useState("");
-
-  // Minimum label counts before enabling ML (UI guard)
-  const ML_MIN_POS = 5;
-  const ML_MIN_NEG = 5;
-  const ML_MIN_TOTAL = 20;
-
-  const posCount = (Number(feedbackStats?.counts?.include || 0) + Number(feedbackStats?.counts?.applied || 0));
-  const negCount = (Number(feedbackStats?.counts?.exclude || 0) + Number(feedbackStats?.counts?.ignore || 0));
-  const totalCount = Number(feedbackStats?.total || 0);
-  const mlReady = posCount >= ML_MIN_POS && negCount >= ML_MIN_NEG && totalCount >= ML_MIN_TOTAL;
-  const mlReadyHint = mlReady
-    ? "Ready"
-    : `Need at least ${ML_MIN_TOTAL} total labels with ${ML_MIN_POS}+ positive (include/applied) and ${ML_MIN_NEG}+ negative (exclude/ignore). Current: ${posCount} pos, ${negCount} neg, ${totalCount} total.`;
-  const load = async () => {
-    setLoading(true);
-    setErr("");
-    try {
-      const s = await apiGet("/api/settings");
-
-      // Feedback stats (non-blocking for settings UI)
-      try {
-        // Prefer a "jobs" view so we can show human-readable job context.
-        const fs = await apiGet("/api/feedback/stats?limit=15&view=jobs");
-        setFeedbackStats(fs);
-        setFeedbackStatsErr("");
-      } catch (e2) {
-        setFeedbackStats(null);
-        setFeedbackStatsErr(String(e2));
-      }
-
-      setRoleKeywords(s.role_keywords || []);
-      setIncludeKeywords(s.include_keywords || []);
-      setExcludeKeywords(s.exclude_keywords || []);
-      setVisaPhrases(s.visa_restriction_phrases || []);
-      setExcludeExceptions(s.exclude_exceptions || []);
-
-      setFilterMode(s.filter_mode || "smart");
-      setMinScoreToInclude(Number.isFinite(s.min_score_to_include) ? s.min_score_to_include : 3);
-
-      setUsOnly(Boolean(s.us_only));
-      setAllowRemoteUs(Boolean(s.allow_remote_us));
-      setPreferredStates(s.preferred_states || []);
-      setWorkMode(s.work_mode || "any");
-
-      setMlEnabled(Boolean(s.ml_enabled));
-      setMlMode(s.ml_mode || "rank_only");
-      setMlRescueThreshold(
-        typeof s.ml_rescue_threshold === "number" ? s.ml_rescue_threshold : 0.85
-      );
-
-      setH1bYears((s.uscis_h1b_years || []).map(String));
-      setH1bCacheDir(s.uscis_h1b_cache_dir || "./.cache/uscis_h1b");
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const isDirty = useMemo(() => JSON.stringify(saved) !== JSON.stringify(draft), [saved, draft]);
 
   useEffect(() => {
-    load();
+    let alive = true;
+    setLoading(true);
+    setFeedbackStatsLoading(true);
+
+    Promise.all([
+      apiGet("/api/settings"),
+      apiGet("/api/feedback/stats?view=jobs&limit=1").catch(() => ({ counts: {} })),
+    ])
+      .then(([settingsData, statsData]) => {
+        if (!alive) return;
+        const next = settingsData || {};
+        setSaved(next);
+        setDraft(next);
+        setFeedbackStats(statsData || { counts: {} });
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setErr(e?.message || "Failed to load settings");
+      })
+      .finally(() => {
+        if (!alive) return;
+        setLoading(false);
+        setFeedbackStatsLoading(false);
+      });
+
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  const payload = useMemo(() => {
-    return {
-      role_keywords: roleKeywords,
-      include_keywords: includeKeywords,
-      exclude_keywords: excludeKeywords,
-      visa_restriction_phrases: visaPhrases,
-      exclude_exceptions: excludeExceptions,
-      filter_mode: filterMode,
-      min_score_to_include: Number(minScoreToInclude) || 3,
-
-      us_only: usOnly,
-      allow_remote_us: allowRemoteUs,
-      preferred_states: preferredStates,
-      work_mode: workMode,
-
-      ml_enabled: mlEnabled,
-      ml_mode: mlMode,
-      ml_rescue_threshold: Number(mlRescueThreshold) || 0.85,
-
-      uscis_h1b_years: (h1bYears || [])
-        .map((x) => Number(x))
-        .filter((n) => Number.isFinite(n)),
-      uscis_h1b_cache_dir: h1bCacheDir,
-    };
-  }, [
-    roleKeywords,
-    includeKeywords,
-    excludeKeywords,
-    visaPhrases,
-    excludeExceptions,
-    filterMode,
-    minScoreToInclude,
-    usOnly,
-    allowRemoteUs,
-    preferredStates,
-    workMode,
-    mlEnabled,
-    mlMode,
-    mlRescueThreshold,
-    h1bYears,
-    h1bCacheDir,
-  ]);
+  const patch = (k, v) => setDraft((d) => ({ ...(d || {}), [k]: v }));
 
   const save = async () => {
-    setSaving(true);
     setErr("");
     try {
-      await apiPut("/api/settings", payload);
-      await load();
+      const res = await apiPut("/api/settings", draft || {});
+      setSaved(res || draft || {});
+      setDraft(res || draft || {});
     } catch (e) {
-      setErr(String(e));
-    } finally {
-      setSaving(false);
+      setErr(e?.message || "Failed to save");
     }
   };
 
+  const reset = () => setDraft(saved || {});
+
+  if (loading) return <div className="jw-muted">Loading...</div>;
+  if (!draft) return <div className="jw-empty">No settings loaded.</div>;
+
+  const nav = [
+    { id: "targets", label: "Targets" },
+    { id: "scoring", label: "Scoring" },
+    { id: "location", label: "Location and work mode" },
+    { id: "visa", label: "Visa and H-1B phrases" },
+    { id: "learning", label: "Learning signals" },
+  ];
+
+  const feedbackCounts = feedbackStats?.counts || {};
+  const mlPositiveCount = Number(feedbackCounts.include || 0) + Number(feedbackCounts.applied || 0);
+  const mlNegativeCount = Number(feedbackCounts.exclude || 0) + Number(feedbackCounts.ignore || 0);
+  const mlLabelTotal = mlPositiveCount + mlNegativeCount;
+  const mlEligible = mlLabelTotal >= 20 && mlPositiveCount > 0 && mlNegativeCount > 0;
+  const mlToggleDisabled = feedbackStatsLoading || (!mlEligible && !draft.ml_enabled);
+  const mlConfigDisabled = mlToggleDisabled || !draft.ml_enabled;
+  const showRescueThreshold = !mlConfigDisabled && (draft.ml_mode || "rank_only") === "rescue";
+
   return (
-    <div style={{ display: "grid", gap: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
-        <h1 className="jw-h1">Settings</h1>
-        <div className="jw-toolbar">
-          <button className="jw-btn" onClick={load} disabled={saving || loading} type="button">
-            {loading ? "Loading…" : "Reload"}
-          </button>
-          <button className="jw-btn primary" onClick={save} disabled={saving || loading} type="button">
-            {saving ? "Saving…" : "Save changes"}
-          </button>
+    <div className="jw-page-shell">
+      <div className="jw-page-hero">
+        <div className="jw-page-hero-main">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span className="jw-badge subtle">
+              <Icon name="settings" size={13} /> Settings
+            </span>
+            <span className={`jw-badge ${isDirty ? "warn" : "ok"}`}>{isDirty ? "Unsaved changes" : "All changes saved"}</span>
+          </div>
+          <h1 className="jw-page-hero-title">Configure matching behavior</h1>
+          <p className="jw-page-hero-sub">
+            Tune relevance, location constraints, and learning signals used by the next run.
+          </p>
         </div>
       </div>
 
       {err ? (
         <div className="jw-alert">
           <b>Error</b>
-          <div style={{ marginTop: 6 }} className="jw-muted">{err}</div>
+          <div style={{ marginTop: 6 }} className="jw-muted">
+            {err}
+          </div>
         </div>
       ) : null}
 
-      {loading ? (
-        <div className="jw-card">
-          <div className="jw-card-b">
-            <div className="jw-muted">Loading settings…</div>
+      <div className="jw-settings-shell">
+        <aside className="jw-settings-nav">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+            <div style={{ fontWeight: 600 }}>Sections</div>
+            <span className="jw-badge subtle">{isDirty ? "Unsaved" : "Saved"}</span>
           </div>
-        </div>
-      ) : (
-        <div style={{ display: "grid", gap: 12 }}>
 
-          {/*
-            Keep Settings readable: group the "learning" pieces on the left,
-            and the most-touched keyword/score knobs on the right.
-          */}
-          <div className="jw-settings-grid">
-            <div style={{ display: "grid", gap: 12 }}>
-              <Section
-                title="Learning signals"
-                subtitle="These labels power ML re-ranking. Aim for 50–100 distinct labeled jobs before enabling ML."
-                right={
-                  <button
-                    className="jw-btn small"
-                    type="button"
-                    onClick={load}
-                    disabled={saving || loading}
-                    title="Refresh feedback stats"
-                  >
-                    Refresh
-                  </button>
-                }
+          <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+            {nav.map((n) => (
+              <button
+                key={n.id}
+                className={`jw-settings-navlink ${active === n.id ? "active" : ""}`}
+                type="button"
+                onClick={() => {
+                  setActive(n.id);
+                  document.getElementById(n.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
               >
-            {feedbackStatsErr ? (
-              <div className="jw-muted2" style={{ fontSize: 12 }}>
-                Could not load feedback stats: {feedbackStatsErr}
-              </div>
-            ) : null}
+                {n.label}
+              </button>
+            ))}
+          </div>
 
-            {!feedbackStats ? (
-              <div className="jw-muted2" style={{ fontSize: 12 }}>
-                No feedback collected yet.
-              </div>
-            ) : (
-              <div style={{ display: "grid", gap: 10 }}>
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
-                  <div className="jw-muted2" style={{ fontSize: 12 }}>
-                    Total events: <b>{feedbackStats.total}</b>
+          <div style={{ marginTop: 12 }} className="jw-help">
+            Keep rules focused and high signal to avoid noisy matches.
+          </div>
+        </aside>
+
+        <div className="jw-settings-main">
+          <div className="jw-settings-actions">
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <span className={`jw-badge ${isDirty ? "warn" : "subtle"}`}>{isDirty ? "Unsaved changes" : "No pending changes"}</span>
+              <span className="jw-help">Save applies to the next fetch run.</span>
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button className="jw-btn ghost" type="button" onClick={reset} disabled={!isDirty}>
+                Reset
+              </button>
+              <button className="jw-btn primary" type="button" onClick={save} disabled={!isDirty}>
+                Save
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gap: 14 }}>
+            <Section id="targets" title="Targets" subtitle="Define preferred role phrases and keyword biasing.">
+              <ChipInput
+                label="Role keywords"
+                help="Use a few strong phrases"
+                value={draft.role_keywords || []}
+                onChange={(v) => patch("role_keywords", v)}
+                placeholder="e.g. frontend engineer, react native, full stack"
+              />
+              <ChipInput
+                label="Include keywords"
+                help="Soft boosts"
+                value={draft.include_keywords || []}
+                onChange={(v) => patch("include_keywords", v)}
+                placeholder="e.g. react, typescript, ios, payments"
+              />
+              <ChipInput
+                label="Exclude keywords"
+                help="Avoid obvious mismatches"
+                value={draft.exclude_keywords || []}
+                onChange={(v) => patch("exclude_keywords", v)}
+                placeholder="e.g. principal, staff, security clearance"
+              />
+            </Section>
+
+            <Section id="scoring" title="Scoring" subtitle="Control strictness and exception behavior.">
+              <FieldRow label="Filter mode" help="smart = rules, score = threshold">
+                <SelectMenu
+                  value={draft.filter_mode || "smart"}
+                  onChange={(v) => patch("filter_mode", v)}
+                  options={[
+                    { value: "smart", label: "Smart (rule-based)" },
+                    { value: "score", label: "Score threshold" },
+                  ]}
+                  ariaLabel="Filter mode"
+                />
+              </FieldRow>
+
+              {draft.filter_mode === "score" ? (
+                <div>
+                  <div className="jw-help" style={{ marginBottom: 15 }}>
+                    Score mode applies a single threshold to the combined signal from all rules. It is more flexible but may require some experimentation to find the right threshold.
                   </div>
-                  <div className="jw-muted2" style={{ fontSize: 12 }}>
-                    Distinct jobs: <b>{feedbackStats.distinct_jobs}</b>
-                  </div>
-                </div>
-
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {["include", "exclude", "applied", "ignore"].map((k) => (
-                    <span
-                      key={k}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 8,
-                        padding: "6px 10px",
-                        borderRadius: 999,
-                        background: "rgba(255,255,255,0.08)",
-                        border: "1px solid var(--border)",
-                        fontWeight: 800,
-                        color: "var(--text)",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {k}: {Number(feedbackStats.counts?.[k] || 0)}
-                    </span>
-                  ))}
-                </div>
-
-                <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-                  <div className="jw-label" style={{ marginBottom: 8 }}>
-                    <span>Recent feedback</span>
-                    <span className="jw-help">latest jobs</span>
-                  </div>
-
-                  <div className="jw-muted2" style={{ fontSize: 12, marginBottom: 10 }}>
-                    You may see multiple feedback events for the same job — that’s expected if you click different labels.
-                    The model uses the <b>latest label per job</b>.
-                  </div>
-
-                  <div style={{ overflowX: "auto" }}>
-                    <table className="jw-table" style={{ minWidth: 760 }}>
-                      <thead>
-                        <tr>
-                          <th style={{ width: 120 }}>When</th>
-                          <th style={{ width: 120 }}>Label</th>
-                          <th style={{ width: 110 }}>Category</th>
-                          <th>Job</th>
-                          <th style={{ width: 90, textAlign: "right" }}>Events</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(feedbackStats.recent || []).map((r) => {
-                          const when = String(r.created_at || "").replace("T", " ").replace("+00:00", "Z");
-                          const jobTitle = r.job_title || "(job not found)";
-                          const jobCompany = r.job_company || "";
-                          const jobUrl = r.job_url || "";
-
-                          return (
-                            <tr key={r.id}>
-                              <td className="jw-muted2" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{when}</td>
-                              <td style={{ fontWeight: 900 }}>{r.label}</td>
-                              <td className="jw-muted2" style={{ fontSize: 12 }}>{r.reason_category || "-"}</td>
-                              <td>
-                                <div style={{ display: "grid", gap: 2 }}>
-                                  {jobUrl ? (
-                                    <a href={jobUrl} target="_blank" rel="noreferrer" style={{ fontWeight: 800 }}>
-                                      {jobTitle} <span style={{ fontWeight: 800 }}>↗</span>
-                                    </a>
-                                  ) : (
-                                    <span style={{ fontWeight: 800 }}>{jobTitle}</span>
-                                  )}
-                                  {jobCompany ? (
-                                    <span className="jw-muted2" style={{ fontSize: 12 }}>{jobCompany}</span>
-                                  ) : null}
-                                </div>
-                              </td>
-                              <td className="jw-muted2" style={{ fontSize: 12, textAlign: "right" }}>{Number(r.events_count || 1)}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            )}
-              </Section>
-
-              <Section
-                title="Local ML relevance"
-                subtitle="Free CPU model that learns from your feedback. Start with rank_only (safe)."
-              >
-            <div style={{ display: "grid", gap: 12 }}>
-              {mlGuardMsg ? (
-                <div className="jw-alert" style={{ marginBottom: 4 }}>
-                  <b>ML not enabled</b>
-                  <div style={{ marginTop: 6 }} className="jw-muted">{mlGuardMsg}</div>
+                  <FieldRow label="Min score to include" help="Used in score mode">
+                    <input
+                      className="jw-input"
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={draft.min_score_to_include ?? 55}
+                      onChange={(e) => patch("min_score_to_include", Number(e.target.value))} />
+                    <div className="jw-help" style={{ marginTop: 6 }}>
+                      Lower includes more jobs. Higher is stricter.
+                    </div>
+                    <div className="jw-help" style={{ marginTop: 4 }}>
+                      Practical score range is usually -4 to +5 with current rules, so thresholds around 1 to 4 are typical.
+                    </div>
+                  </FieldRow>
                 </div>
               ) : null}
 
-              <label style={{ display: "inline-flex", gap: 10, alignItems: "center" }}>
-                <input
-                  type="checkbox"
-                  checked={mlEnabled}
-                  disabled={!mlReady && !mlEnabled}
-                  onChange={(e) => {
-                    const next = e.target.checked;
-                    if (next && !mlReady) {
-                      setMlGuardMsg(mlReadyHint);
-                      return;
-                    }
-                    setMlGuardMsg("");
-                    setMlEnabled(next);
-                  }}
+              <ChipInput
+                label="Exclude exceptions"
+                help="Allow specific terms to bypass excludes"
+                value={draft.exclude_exceptions || []}
+                onChange={(v) => patch("exclude_exceptions", v)}
+                placeholder="e.g. frontend exception for senior"
+              />
+            </Section>
+
+            <Section id="location" title="Location and work mode" subtitle="Constrain results to your location preferences.">
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <input type="checkbox" checked={!!draft.us_only} onChange={(e) => patch("us_only", e.target.checked)} />
+                  <div>
+                    <div style={{ fontWeight: 500 }}>US-only</div>
+                    <div className="jw-help">Hard constraint</div>
+                  </div>
+                </label>
+
+                <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!draft.allow_remote_us}
+                    onChange={(e) => patch("allow_remote_us", e.target.checked)}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 500 }}>Allow Remote (US)</div>
+                    <div className="jw-help">Counts as US-only</div>
+                  </div>
+                </label>
+              </div>
+
+              <FieldRow label="Work mode" help="any, remote, hybrid, onsite">
+                <SelectMenu
+                  value={draft.work_mode || "any"}
+                  onChange={(v) => patch("work_mode", v)}
+                  options={[
+                    { value: "any", label: "Any" },
+                    { value: "remote", label: "Remote" },
+                    { value: "hybrid", label: "Hybrid" },
+                    { value: "onsite", label: "Onsite" },
+                  ]}
+                  ariaLabel="Work mode"
                 />
-                <span style={{ fontWeight: 800 }}>
-                  Enable ML re-ranking
-                  {!mlReady && !mlEnabled ? (
-                    <span className="jw-muted2" style={{ fontSize: 12, marginLeft: 10 }}>
-                      (locked — {mlReadyHint})
-                    </span>
-                  ) : null}
-                </span>
-              </label>
-
-              <div className="jw-row">
-                <div className="jw-col">
-                  <div className="jw-label">
-                    <span>Mode</span>
-                    <span className="jw-help">start with rank_only</span>
-                  </div>
-                  <select
-                    className="jw-select"
-                    value={mlMode}
-                    onChange={(e) => setMlMode(e.target.value)}
-                    disabled={!mlEnabled}
-                  >
-                    <option value="rank_only">Rank only (no inclusion changes)</option>
-                    <option value="rescue" disabled>
-                      Rescue (coming soon)
-                    </option>
-                  </select>
-                  <div className="jw-muted2" style={{ fontSize: 12, marginTop: 6 }}>
-                    When enabled, New/Settings job lists default to "Relevance" ordering using the latest model.
-                  </div>
-                </div>
-
-                <div className="jw-col">
-                  <div className="jw-label">
-                    <span>Rescue threshold</span>
-                    <span className="jw-help">used in rescue mode</span>
-                  </div>
-                  <input
-                    className="jw-input"
-                    type="number"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    value={mlRescueThreshold}
-                    onChange={(e) => setMlRescueThreshold(e.target.value)}
-                    disabled
-                  />
-                  <div className="jw-muted2" style={{ fontSize: 12, marginTop: 6 }}>
-                    Disabled for now (we'll wire this when we implement rescue with guardrails).
-                  </div>
-                </div>
-              </div>
-            </div>
-              </Section>
-            </div>
-
-            <div style={{ display: "grid", gap: 12 }}>
-              <Section
-                title="Keyword targeting"
-                subtitle="Fast scan/edit using chips. Paste comma/newline lists to bulk add."
-              >
-            <div style={{ display: "grid", gap: 14 }}>
-              <div className="jw-row">
-                <div className="jw-col">
-                  <div className="jw-label">
-                    <span>Filter mode</span>
-                    <span className="jw-help">smart vs score</span>
-                  </div>
-                  <select className="jw-select" value={filterMode} onChange={(e) => setFilterMode(e.target.value)}>
-                    <option value="smart">Smart (deterministic)</option>
-                    <option value="score">Score (recommended)</option>
-                  </select>
-                  <div className="jw-muted2" style={{ fontSize: 12, marginTop: 6 }}>
-                    In score mode, include/exclude keywords adjust the score — they don’t hard-block jobs.
-                  </div>
-                </div>
-
-                <div className="jw-col">
-                  <div className="jw-label">
-                    <span>Min score to include</span>
-                    <span className="jw-help">score mode</span>
-                  </div>
-                  <input
-                    className="jw-input"
-                    type="number"
-                    min="0"
-                    max="10"
-                    step="1"
-                    value={minScoreToInclude}
-                    onChange={(e) => setMinScoreToInclude(e.target.value)}
-                    disabled={filterMode !== "score"}
-                  />
-                  <div className="jw-muted2" style={{ fontSize: 12, marginTop: 6 }}>
-                    Score range: roughly <b>0–10+</b> depending on matches. Higher is stricter.
-                    Typical: <b>2–4</b>. Start at <b>3</b> and adjust after a run.
-                  </div>
-                </div>
-              </div>
+              </FieldRow>
 
               <ChipInput
-                label="Role keywords"
-                help="targets"
-                value={roleKeywords}
-                onChange={setRoleKeywords}
-                placeholder="frontend, full stack, react native…"
+                label="Preferred states"
+                help="Optional"
+                value={draft.preferred_states || []}
+                onChange={(v) => patch("preferred_states", v)}
+                placeholder="e.g. CA, TX, WA"
               />
+            </Section>
 
-              <div className="jw-row">
-                <div className="jw-col">
-                  <ChipInput
-                    label="Include keywords"
-                    help="boost matches"
-                    value={includeKeywords}
-                    onChange={setIncludeKeywords}
-                    placeholder="react, ios, android…"
-                  />
-                </div>
-                <div className="jw-col">
-                  <ChipInput
-                    label="Exclude keywords"
-                    help="remove noise"
-                    value={excludeKeywords}
-                    onChange={setExcludeKeywords}
-                    placeholder="intern, staff, principal…"
-                  />
-
-                  <div style={{ marginTop: 12 }}>
-                    <ChipInput
-                      label="Exclude exceptions"
-                      help="rare"
-                      value={excludeExceptions}
-                      onChange={setExcludeExceptions}
-                      placeholder="phrases that should override an exclude hit…"
-                    />
-                  </div>
-                </div>
-              </div>
-
+            <Section id="visa" title="Visa and H-1B phrases" subtitle="Maintain a short, high-signal restriction list.">
               <ChipInput
                 label="Visa restriction phrases"
-                help="filters explicit no-sponsor"
-                value={visaPhrases}
-                onChange={setVisaPhrases}
-                placeholder="no visa sponsorship, US citizens only…"
+                help="Used as a negative signal"
+                value={draft.visa_restriction_phrases || []}
+                onChange={(v) => patch("visa_restriction_phrases", v)}
+                placeholder="e.g. no sponsorship, must be US citizen"
               />
-            </div>
-              </Section>
-            </div>
-          </div>
 
-          <Section
-            title="Location & work mode"
-            subtitle="US-only is enforced in the backend. Preferred states is optional."
-          >
-            <div style={{ display: "grid", gap: 12 }}>
-              <div className="jw-toolbar">
+              <FieldRow label="USCIS H-1B years" help="Historical signal only">
+                <input
+                  className="jw-input"
+                  value={(draft.uscis_h1b_years || []).join(",")}
+                  onChange={(e) =>
+                    patch(
+                      "uscis_h1b_years",
+                      e.target.value
+                        .split(/[,\s]+/)
+                        .map((x) => x.trim())
+                        .filter(Boolean)
+                        .map((x) => Number(x))
+                        .filter((x) => Number.isFinite(x))
+                    )
+                  }
+                  placeholder="e.g. 2024, 2023, 2022"
+                />
+              </FieldRow>
+            </Section>
+
+            <Section id="learning" title="Learning signals" subtitle="Optional local ML relevance support.">
+              <FieldRow label="Enable ML relevance" help="Local only">
                 <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <input type="checkbox" checked={usOnly} onChange={(e) => setUsOnly(e.target.checked)} />
-                  <span style={{ fontWeight: 800 }}>US-only</span>
-                </label>
-
-                <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <input type="checkbox" checked={allowRemoteUs} onChange={(e) => setAllowRemoteUs(e.target.checked)} />
-                  <span style={{ fontWeight: 800 }}>Allow Remote (US)</span>
-                </label>
-
-                <span className="jw-badge subtle">Work mode: <b style={{ marginLeft: 6 }}>{workMode}</b></span>
-              </div>
-
-              <div className="jw-row">
-                <div className="jw-col">
-                  <ChipInput
-                    label="Preferred states"
-                    help="optional"
-                    value={preferredStates}
-                    onChange={setPreferredStates}
-                    placeholder="CA, TX, WA…"
+                  <input
+                    type="checkbox"
+                    checked={!!draft.ml_enabled}
+                    disabled={mlToggleDisabled}
+                    onChange={(e) => patch("ml_enabled", e.target.checked)}
                   />
-                  <div className="jw-muted2" style={{ fontSize: 12, marginTop: 6 }}>
-                    If empty → no state filtering.
+                  <span className="jw-help">No external API calls.</span>
+                </label>
+                <div className="jw-help" style={{ marginTop: 6 }}>
+                  {feedbackStatsLoading
+                    ? "Checking feedback coverage..."
+                    : mlEligible
+                    ? `Ready: ${mlLabelTotal} labels (${mlPositiveCount} positive, ${mlNegativeCount} negative).`
+                    : `Requires at least 20 labels with both positive and negative feedback. Current: ${mlLabelTotal} labels (${mlPositiveCount} positive, ${mlNegativeCount} negative).`}
+                </div>
+              </FieldRow>
+
+              <FieldRow label="ML mode" help="rank_only or rescue">
+                <SelectMenu
+                  value={draft.ml_mode || "rank_only"}
+                  onChange={(v) => patch("ml_mode", v)}
+                  options={[
+                    { value: "rank_only", label: "Rank only" },
+                    { value: "rescue", label: "Rescue borderline jobs" },
+                  ]}
+                  disabled={mlConfigDisabled}
+                  ariaLabel="ML mode"
+                />
+              </FieldRow>
+
+              {showRescueThreshold ? (
+                <FieldRow label="Rescue threshold" help="Typical 0.75 to 0.90">
+                  <input
+                    className="jw-input"
+                    type="number"
+                    step="0.01"
+                    min={0}
+                    max={1}
+                    value={draft.ml_rescue_threshold ?? 0.85}
+                    onChange={(e) => patch("ml_rescue_threshold", Number(e.target.value))}
+                    disabled={mlConfigDisabled}
+                  />
+                  <div className="jw-help" style={{ marginTop: 6 }}>
+                    Jobs below your threshold can still be rescued when ML relevance exceeds this value. Higher threshold rescues fewer jobs.
                   </div>
-                </div>
+                </FieldRow>
+              ) : null}
+            </Section>
 
-                <div className="jw-col">
-                  <div className="jw-label">
-                    <span>Work mode</span>
-                    <span className="jw-help">filter</span>
-                  </div>
-                  <select className="jw-select" value={workMode} onChange={(e) => setWorkMode(e.target.value)}>
-                    <option value="any">Any</option>
-                    <option value="remote">Remote</option>
-                    <option value="hybrid">Hybrid</option>
-                    <option value="onsite">Onsite</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          </Section>
-
-          <details className="jw-card" style={{ padding: 0 }}>
-            <summary
-              style={{
-                cursor: "pointer",
-                listStyle: "none",
-                padding: 14,
-                fontWeight: 900,
-                borderBottom: "1px solid var(--border)",
-              }}
-            >
-              H-1B signal (advanced)
-              <span className="jw-muted2" style={{ marginLeft: 10, fontWeight: 700 }}>
-                optional config
-              </span>
-            </summary>
-
-            <div className="jw-card-b" style={{ display: "grid", gap: 12 }}>
-              <ChipInput
-                label="USCIS H-1B years"
-                help="comma/newline ok"
-                value={h1bYears}
-                onChange={setH1bYears}
-                placeholder="2024, 2023…"
-              />
-
-              <div>
-                <div className="jw-label">
-                  <span>Cache directory</span>
-                  <span className="jw-help">advanced</span>
-                </div>
-                <input className="jw-input" value={h1bCacheDir} onChange={(e) => setH1bCacheDir(e.target.value)} />
-                <div className="jw-muted2" style={{ fontSize: 12, marginTop: 6 }}>
-                  Historical signal only — not a guarantee of sponsorship.
-                </div>
-              </div>
-            </div>
-          </details>
-
-          <div className="jw-card" style={{ position: "sticky", bottom: 12, background: "rgba(248,250,252,0.82)", backdropFilter: "blur(12px)" }}>
-            <div className="jw-card-b" style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-              <div className="jw-muted2" style={{ fontSize: 12 }}>
-                Changes apply to future runs. Run the fetcher from Dashboard to see updated results.
-              </div>
-              <div className="jw-toolbar">
-                <button className="jw-btn" onClick={load} disabled={saving} type="button">
-                  Reload
-                </button>
-                <button className="jw-btn primary" onClick={save} disabled={saving} type="button">
-                  {saving ? "Saving…" : "Save changes"}
-                </button>
-              </div>
-            </div>
+            <div style={{ height: 24 }} aria-hidden="true" />
           </div>
         </div>
-      )}
+      </div>
+
+      <style>{`
+        .jw-settings-shell{
+          display: grid;
+          grid-template-columns: 260px 1fr;
+          gap: 14px;
+          align-items: start;
+        }
+        .jw-settings-nav{
+          position: sticky;
+          top: calc(var(--topbar-h) + 14px);
+          align-self: start;
+          border: 1px solid var(--border);
+          border-radius: var(--radius);
+          background: rgba(24, 33, 45, 0.54);
+          padding: 12px;
+          box-shadow: var(--shadow-sm);
+        }
+        .jw-settings-navlink{
+          width: 100%;
+          text-align: left;
+          border: 1px solid transparent;
+          background: transparent;
+          color: var(--muted);
+          padding: 10px 10px;
+          border-radius: 12px;
+          cursor: pointer;
+          font-weight: 500;
+        }
+        .jw-settings-navlink:hover{
+          background: rgba(255,255,255,0.04);
+          border-color: rgba(148,163,184,0.18);
+          color: var(--text);
+        }
+        .jw-settings-navlink.active{
+          background: var(--primary-soft);
+          border-color: rgba(var(--primary-rgb), 0.36);
+          color: var(--text);
+        }
+        .jw-settings-main{
+          min-width: 0;
+          display: grid;
+          gap: 14px;
+        }
+        .jw-settings-actions{
+          position: sticky;
+          top: calc(var(--topbar-h) + 14px);
+          z-index: 8;
+          border: 1px solid var(--border);
+          border-radius: var(--radius);
+          background: rgba(16, 23, 33, 0.92);
+          box-shadow: var(--shadow-sm);
+          padding: 12px;
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          align-items: center;
+          flex-wrap: wrap;
+        }
+        .jw-chip-field{
+          display: grid;
+          gap: 10px;
+        }
+        .jw-chip-rail{
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+        .jw-chip-modal-list{
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          max-height: 280px;
+          overflow: auto;
+          padding-right: 4px;
+        }
+        .jw-chip-main-controls{
+          display: grid;
+          grid-template-columns: 1fr auto auto;
+          gap: 10px;
+          align-items: center;
+        }
+        .jw-chip-editor-row{
+          display: grid;
+          grid-template-columns: 1fr auto;
+          gap: 10px;
+        }
+        .jw-chip{
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px 10px;
+          border-radius: 999px;
+          // border: 1px solid rgba(var(--primary-rgb), 0.44);
+          background: linear-gradient(180deg, rgba(var(--primary-rgb), 0.24), rgba(18, 26, 37, 0.9));
+          color: #e6fff3;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+          font-size: var(--fs-xs);
+          max-width: 100%;
+        }
+        .jw-chip > span:first-child{
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 38ch;
+        }
+        .jw-chip-remove{
+          border: 0;
+          width: 18px;
+          height: 18px;
+          display: grid;
+          place-items: center;
+          border-radius: 999px;
+          background: rgba(255,255,255,0.12);
+          color: var(--text);
+          cursor: pointer;
+          padding: 0;
+          line-height: 1;
+          font-size: 11px;
+        }
+        .jw-chip-remove:hover{
+          background: rgba(251,113,133,0.22);
+          color: #fecdd3;
+        }
+        .jw-chip-more{
+          border: 1px dashed rgba(var(--primary-rgb), 0.48);
+          background: rgba(var(--primary-rgb), 0.14);
+          color: #a7f3d0;
+          border-radius: 999px;
+          padding: 6px 10px;
+          font-size: var(--fs-xs);
+          font-weight: 600;
+          cursor: pointer;
+        }
+        .jw-chip-more:hover{
+          border-color: rgba(var(--primary-rgb), 0.64);
+          background: rgba(var(--primary-rgb), 0.2);
+        }
+
+        @media (max-width: 1023px){
+          .jw-settings-shell{ grid-template-columns: 1fr; }
+          .jw-settings-nav{
+            position: relative;
+            top: auto;
+          }
+          .jw-settings-actions{
+            position: relative;
+            top: auto;
+          }
+        }
+        @media (max-width: 640px){
+          .jw-chip-main-controls{
+            grid-template-columns: 1fr;
+          }
+          .jw-chip-editor-row{
+            grid-template-columns: 1fr;
+          }
+        }
+      `}</style>
     </div>
   );
 }
+
