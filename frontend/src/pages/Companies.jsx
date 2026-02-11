@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { apiGet } from "../api/client";
+import Icon from "../components/Icon.jsx";
+import SelectMenu from "../components/SelectMenu.jsx";
 
 /* -------------------------
    tiny fetch helpers
@@ -120,7 +123,7 @@ export default function Companies() {
 
   // list controls
   const [q, setQ] = useState("");
-  const [pageSize, setPageSize] = useState(15);
+  const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(1);
 
   // selection
@@ -204,11 +207,16 @@ export default function Companies() {
   }, [q, pageSize]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(filtered.length / pageSize)), [filtered.length, pageSize]);
+  const safePage = Math.min(page, totalPages);
+
+  useEffect(() => {
+    if (safePage !== page) setPage(safePage);
+  }, [safePage, page]);
 
   const pageItems = useMemo(() => {
-    const start = (page - 1) * pageSize;
+    const start = (safePage - 1) * pageSize;
     return filtered.slice(start, start + pageSize);
-  }, [filtered, page, pageSize]);
+  }, [filtered, safePage, pageSize]);
 
   const selectedCompany = useMemo(() => {
     return (companies || []).find((c) => c.id === selectedId) || null;
@@ -265,7 +273,7 @@ export default function Companies() {
       await apiPost(`/api/companies/${selectedCompany.id}/apply_discovery`, { sources: srcs });
       await load();
       closeDiscover();
-      setDetailMsg("✅ Applied recommended sources.");
+      setDetailMsg("Applied recommended sources.");
     } catch (e) {
       setDiscoverErr(String(e));
     } finally {
@@ -359,9 +367,9 @@ export default function Companies() {
 
       await load();
       setEditMode(false);
-      setDetailMsg("✅ Saved changes.");
+      setDetailMsg("Saved changes.");
     } catch (e) {
-      setDetailMsg(`⚠️ ${String(e)}`);
+      setDetailMsg(`Error: ${String(e)}`);
     } finally {
       setSaveLoading(false);
     }
@@ -382,11 +390,12 @@ export default function Companies() {
     }
   };
 
-  return (
-    <div style={{ display: "grid", gap: 14 }}>
+  const modalNode = typeof document !== "undefined" ? document.body : null;
+  const overlayAndPanels = (
+    <>
       {/* overlays */}
       <div className={`jw-modal-overlay ${addOpen ? "open" : ""}`} onClick={() => setAddOpen(false)} />
-      <div className={`jw-modal-overlay ${drawerOpen ? "open" : ""}`} onClick={closeDiscover} />
+      {drawerOpen ? <div className="jw-modal-overlay open" onClick={closeDiscover} /> : null}
 
       {/* Add modal */}
       <div className={`jw-modal ${addOpen ? "open" : ""}`} role="dialog" aria-modal="true" aria-hidden={!addOpen}>
@@ -427,10 +436,17 @@ export default function Companies() {
 
                 <div className="jw-toolbar" style={{ justifyContent: "space-between" }}>
                   <span className="jw-badge subtle">Render</span>
-                  <select className="jw-select" style={{ width: 240 }} value={addCareerMode} onChange={(e) => setAddCareerMode(e.target.value)}>
-                    <option value="requests">requests (fast)</option>
-                    <option value="playwright">playwright (JS-rendered)</option>
-                  </select>
+                  <div style={{ width: 240 }}>
+                    <SelectMenu
+                      value={addCareerMode}
+                      onChange={setAddCareerMode}
+                      options={[
+                        { value: "requests", label: "requests (fast)" },
+                        { value: "playwright", label: "playwright (JS rendered)" },
+                      ]}
+                      ariaLabel="Add render mode"
+                    />
+                  </div>
                 </div>
 
                 <div className="jw-muted2" style={{ fontSize: 12 }}>
@@ -442,7 +458,7 @@ export default function Companies() {
             <div className="jw-toolbar" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
               <label className="jw-toolbar" style={{ gap: 10, cursor: "pointer" }}>
                 <input type="checkbox" checked={autoDiscover} onChange={(e) => setAutoDiscover(e.target.checked)} />
-                <span style={{ fontWeight: 900 }}>Auto-discover sources</span>
+                <span style={{ fontWeight: 600 }}>Auto-discover sources</span>
               </label>
 
               <button className="jw-btn small" onClick={() => setShowAdvanced((v) => !v)} type="button">
@@ -484,152 +500,162 @@ export default function Companies() {
       </div>
 
       {/* Discover drawer */}
-      <aside className={`jw-drawer ${drawerOpen ? "open" : ""}`} aria-hidden={!drawerOpen}>
-        <div className="jw-drawer-h">
-          <div style={{ minWidth: 0 }}>
-            <div className="jw-drawer-title">Discover sources</div>
-            <div className="jw-drawer-sub" style={{ wordBreak: "break-word" }}>
-              {selectedCompany?.company_name || ""}
-            </div>
-          </div>
-          <div className="jw-toolbar">
-            <button
-              className="jw-btn small"
-              type="button"
-              onClick={() => selectedCompany && openDiscover(selectedCompany)}
-              disabled={!selectedCompany || discoverLoading}
-            >
-              {discoverLoading ? "Checking…" : "Re-run"}
-            </button>
-            <button className="jw-btn small" type="button" onClick={closeDiscover}>
-              Close
-            </button>
-          </div>
-        </div>
-
-        <div className="jw-drawer-b">
-          {discoverErr ? (
-            <div className="jw-alert" style={{ marginBottom: 12 }}>
-              <b>Discovery error</b>
-              <div className="jw-muted" style={{ marginTop: 6 }}>
-                {discoverErr}
+      {drawerOpen ? (
+        <aside className="jw-drawer open" aria-hidden={!drawerOpen}>
+          <div className="jw-drawer-h">
+            <div style={{ minWidth: 0 }}>
+              <div className="jw-drawer-title">Discover sources</div>
+              <div className="jw-drawer-sub" style={{ wordBreak: "break-word" }}>
+                {selectedCompany?.company_name || ""}
               </div>
             </div>
-          ) : null}
+            <div className="jw-toolbar">
+              <button
+                className="jw-btn small"
+                type="button"
+                onClick={() => selectedCompany && openDiscover(selectedCompany)}
+                disabled={!selectedCompany || discoverLoading}
+              >
+                {discoverLoading ? "Checking..." : "Re-run"}
+              </button>
+              <button className="jw-btn small" type="button" onClick={closeDiscover}>
+                Close
+              </button>
+            </div>
+          </div>
 
-          {discoverLoading ? (
-            <div className="jw-muted">Running bounded checks…</div>
-          ) : discoverData ? (
-            <div style={{ display: "grid", gap: 14 }}>
-              <div className="jw-card" style={{ background: "transparent" }}>
-                <div className="jw-card-b" style={{ display: "grid", gap: 10 }}>
-                  <div className="jw-toolbar" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-                    <div>
-                      <div style={{ fontWeight: 1000 }}>Recommended</div>
-                      <div className="jw-muted2" style={{ fontSize: 12, marginTop: 4 }}>
-                        Verified GH/Lever (if found) + career URL fallback.
-                      </div>
-                    </div>
+          <div className="jw-drawer-b">
+            {discoverErr ? (
+              <div className="jw-alert" style={{ marginBottom: 12 }}>
+                <b>Discovery error</b>
+                <div className="jw-muted" style={{ marginTop: 6 }}>
+                  {discoverErr}
+                </div>
+              </div>
+            ) : null}
 
-                    <button
-                      className="jw-btn primary"
-                      type="button"
-                      disabled={applyLoading || !toApplySources(discoverData.recommended).length}
-                      onClick={applyRecommended}
-                    >
-                      {applyLoading ? "Applying…" : "Apply recommended"}
-                    </button>
-                  </div>
-
-                  {!discoverData.recommended?.length ? (
-                    <div className="jw-muted">No recommendations yet.</div>
-                  ) : (
-                    <div style={{ display: "grid", gap: 8 }}>
-                      {discoverData.recommended.map((s, idx) => (
-                        <div key={idx} className="jw-rowline">
-                          <span className="jw-badge subtle">{s.type}</span>
-                          <span className="jw-rowline-main">
-                            {s.type === "career_url" ? s.url : s.slug}
-                            {s.verified ? <span style={{ margin: '0px 10px' }}>✅ Verified</span> : null}
-                          </span>
+            {discoverLoading ? (
+              <div className="jw-muted">Running bounded checks...</div>
+            ) : discoverData ? (
+              <div style={{ display: "grid", gap: 14 }}>
+                <div className="jw-card" style={{ background: "transparent" }}>
+                  <div className="jw-card-b" style={{ display: "grid", gap: 10 }}>
+                    <div className="jw-toolbar" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                      <div>
+                        <div style={{ fontWeight: 700 }}>Recommended</div>
+                        <div className="jw-muted2" style={{ fontSize: 12, marginTop: 4 }}>
+                          Verified GH/Lever (if found) + career URL fallback.
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="jw-card" style={{ background: "transparent" }}>
-                <div className="jw-card-b">
-                  <div className="jw-toolbar" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-                    <div>
-                      <div style={{ fontWeight: 1000 }}>All candidates</div>
-                      <div className="jw-muted2" style={{ fontSize: 12, marginTop: 4 }}>
-                        Highest-signal candidates float to the top.
                       </div>
+
+                      <button
+                        className="jw-btn primary"
+                        type="button"
+                        disabled={applyLoading || !toApplySources(discoverData.recommended).length}
+                        onClick={applyRecommended}
+                      >
+                        {applyLoading ? "Applying..." : "Apply recommended"}
+                      </button>
                     </div>
-                    <span className="jw-badge subtle">{discoverData.candidates?.length || 0} checked</span>
-                  </div>
 
-                  <div style={{ marginTop: 10, overflowX: "auto" }}>
-                    <table className="jw-table">
-                      <thead>
-                        <tr>
-                          <th>Type</th>
-                          <th>Identifier</th>
-                          <th>Status</th>
-                          <th>Jobs</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(discoverData.candidates || []).map((c, idx) => (
-                          <tr key={idx}>
-                            <td><span className="jw-badge subtle">{c.type}</span></td>
-                            <td style={{ maxWidth: 280, wordBreak: "break-word" }}>{c.type === "career_url" ? c.url : c.slug}</td>
-                            <td>
-                              {c.verified ? (
-                                <span className="jw-pill ok" style={{ margin: 0 }}>✅ Verified</span>
-                              ) : c.error ? (
-                                <span className="jw-pill bad" style={{ margin: 0 }}>⚠️ {String(c.error).slice(0, 40)}</span>
-                              ) : (
-                                <span className="jw-pill" style={{ margin: 0 }}>—</span>
-                              )}
-                            </td>
-                            <td>{typeof c.job_count === "number" ? c.job_count : "—"}</td>
-                          </tr>
+                    {!discoverData.recommended?.length ? (
+                      <div className="jw-muted">No recommendations yet.</div>
+                    ) : (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {discoverData.recommended.map((s, idx) => (
+                          <div key={idx} className="jw-rowline">
+                            <span className="jw-badge subtle">{s.type}</span>
+                            <span className="jw-rowline-main">
+                              {s.type === "career_url" ? s.url : s.slug}
+                              {s.verified ? <span style={{ margin: "0px 10px" }} className="jw-badge ok">Verified</span> : null}
+                            </span>
+                          </div>
                         ))}
-                      </tbody>
-                    </table>
+                      </div>
+                    )}
                   </div>
+                </div>
 
-                  <div className="jw-muted2" style={{ fontSize: 12, marginTop: 10 }}>
-                    Tip: If a company is JS-heavy, set Career URL render mode to <b>playwright</b>.
+                <div className="jw-card" style={{ background: "transparent" }}>
+                  <div className="jw-card-b">
+                    <div className="jw-toolbar" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                      <div>
+                        <div style={{ fontWeight: 700 }}>All candidates</div>
+                        <div className="jw-muted2" style={{ fontSize: 12, marginTop: 4 }}>
+                          Highest-signal candidates float to the top.
+                        </div>
+                      </div>
+                      <span className="jw-badge subtle">{discoverData.candidates?.length || 0} checked</span>
+                    </div>
+
+                    <div style={{ marginTop: 10, overflowX: "auto" }}>
+                      <table className="jw-table">
+                        <thead>
+                          <tr>
+                            <th>Type</th>
+                            <th>Identifier</th>
+                            <th>Status</th>
+                            <th>Jobs</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(discoverData.candidates || []).map((c, idx) => (
+                            <tr key={idx}>
+                              <td><span className="jw-badge subtle">{c.type}</span></td>
+                              <td style={{ maxWidth: 280, wordBreak: "break-word" }}>{c.type === "career_url" ? c.url : c.slug}</td>
+                              <td>
+                                {c.verified ? (
+                                  <span className="jw-pill ok" style={{ margin: 0 }}>Verified</span>
+                                ) : c.error ? (
+                                  <span className="jw-pill bad" style={{ margin: 0 }}>{String(c.error).slice(0, 40)}</span>
+                                ) : (
+                                  <span className="jw-pill" style={{ margin: 0 }}>-</span>
+                                )}
+                              </td>
+                              <td>{typeof c.job_count === "number" ? c.job_count : "-"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="jw-muted2" style={{ fontSize: 12, marginTop: 10 }}>
+                      Tip: If a company is JS-heavy, set Career URL render mode to <b>playwright</b>.
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ) : (
-            <div className="jw-muted">Select a company and run discovery.</div>
-          )}
-        </div>
-      </aside>
-
-      {/* Header */}
-      <div className="jw-pagebar">
-        <div>
-          <h1 className="jw-h1">Companies</h1>
-          <div className="jw-muted2" style={{ marginTop: 4 }}>
-            Add → discover → apply. Keep the list clean and scalable.
+            ) : (
+              <div className="jw-muted">Select a company and run discovery.</div>
+            )}
           </div>
+        </aside>
+      ) : null}
+    </>
+  );
+
+  return (
+    <div className="jw-page-shell">
+      {modalNode ? createPortal(overlayAndPanels, modalNode) : overlayAndPanels}
+
+      <div className="jw-page-hero">
+        <div className="jw-page-hero-main">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span className="jw-badge subtle">
+              <Icon name="building" size={13} /> Companies
+            </span>
+            <span className="jw-badge subtle">{companies?.length || 0} saved</span>
+          </div>
+          <h1 className="jw-page-hero-title">Company Source Control</h1>
+          <p className="jw-page-hero-sub">Add target companies, discover source endpoints, and keep source mappings clean.</p>
         </div>
 
         <div className="jw-toolbar" style={{ flexWrap: "wrap" }}>
-          <span className="jw-badge subtle">{companies?.length || 0} saved</span>
           <button className="jw-btn" onClick={load} disabled={loading} type="button">
-            {loading ? "Refreshing…" : "Refresh"}
+            <Icon name="refresh" size={14} /> {loading ? "Refreshing..." : "Refresh"}
           </button>
           <button className="jw-btn primary" onClick={() => setAddOpen(true)} type="button">
-            + Add company
+            <Icon name="spark" size={14} /> Add company
           </button>
         </div>
       </div>
@@ -648,7 +674,7 @@ export default function Companies() {
         {/* Left: List */}
         <div className="jw-pane">
           <div className="jw-pane-h">
-            <input className="jw-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search companies…" />
+            <input className="jw-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search companies..." />
             <div className="jw-toolbar" style={{ justifyContent: "space-between", marginTop: 10, gap: 10, flexWrap: "wrap" }}>
               <div className="jw-toolbar" style={{ gap: 10 }}>
                 <span className="jw-muted2" style={{ fontSize: 12 }}>
@@ -658,19 +684,21 @@ export default function Companies() {
 
               <div className="jw-toolbar" style={{ gap: 10 }}>
                 <span className="jw-muted2" style={{ fontSize: 12 }}>Rows</span>
-                <select className="jw-select" style={{ width: 110 }} value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
-                  <option value={10}>10</option>
-                  <option value={15}>15</option>
-                  <option value={25}>25</option>
-                  <option value={50}>50</option>
-                </select>
+                <div style={{ width: 110 }}>
+                  <SelectMenu
+                    value={pageSize}
+                    onChange={(next) => setPageSize(Number(next))}
+                    options={[10, 15, 25, 50].map((n) => ({ value: n, label: String(n) }))}
+                    ariaLabel="Rows per page"
+                  />
+                </div>
               </div>
             </div>
           </div>
 
           <div className="jw-list">
             {loading ? (
-              <div className="jw-empty">Loading…</div>
+              <div className="jw-empty">Loading...</div>
             ) : !filtered.length ? (
               <div className="jw-empty">No companies yet. Click <b>+ Add company</b> to start.</div>
             ) : (
@@ -688,7 +716,7 @@ export default function Companies() {
                     <div className="jw-listitem-top">
                       <div className="jw-listitem-title">{c.company_name}</div>
                       <span className={`jw-pill ${st.cls}`} style={{ margin: 0 }}>
-                        {st.cls === "ok" ? "●" : "○"} {st.label}
+                        {st.label}
                       </span>
                     </div>
 
@@ -697,7 +725,7 @@ export default function Companies() {
                         {src.length ? src.map((x) => <span key={x.k} className="jw-mini" title={x.label}>{x.label}</span>) : "No sources"}
                       </span>
                       <span className="jw-muted2" style={{ fontSize: 12 }}>
-                        {c.sources?.length ? `${c.sources.length} source(s)` : "—"}
+                        {c.sources?.length ? `${c.sources.length} source(s)` : "-"}
                       </span>
                     </div>
                   </button>
@@ -708,19 +736,19 @@ export default function Companies() {
 
           <div className="jw-pane-f">
             <div className="jw-toolbar" style={{ justifyContent: "space-between", width: "100%" }}>
-              <button className="jw-btn small" type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
-                ← Prev
+              <button className="jw-btn small" type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1}>
+                Prev
               </button>
               <span className="jw-muted2" style={{ fontSize: 12 }}>
-                Page <b>{page}</b> / <b>{totalPages}</b>
+                Page <b>{safePage}</b> / <b>{totalPages}</b>
               </span>
               <button
                 className="jw-btn small"
                 type="button"
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={page >= totalPages}
+                disabled={safePage >= totalPages}
               >
-                Next →
+                Next
               </button>
             </div>
           </div>
@@ -736,7 +764,7 @@ export default function Companies() {
                 <div style={{ minWidth: 0 }}>
                   <div className="jw-detail-title">{selectedCompany.company_name}</div>
                   <div className="jw-muted2" style={{ fontSize: 12, marginTop: 4 }}>
-                    id: {selectedCompany.id} • priority: <b>{(selectedCompany.source_priority || []).join(" → ")}</b>
+                    id: {selectedCompany.id} - priority: <b>{(selectedCompany.source_priority || []).join(" > ")}</b>
                   </div>
                 </div>
 
@@ -762,7 +790,7 @@ export default function Companies() {
               <div className="jw-card" style={{ background: "transparent" }}>
                 <div className="jw-card-b" style={{ display: "grid", gap: 12 }}>
                   <div className="jw-toolbar" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-                    <div style={{ fontWeight: 1000 }}>Sources</div>
+                    <div style={{ fontWeight: 700 }}>Sources</div>
                     {!editMode ? (
                       <span className="jw-badge subtle">{(selectedCompany.sources || []).length} total</span>
                     ) : null}
@@ -783,7 +811,7 @@ export default function Companies() {
                                   </span>
                                 </span>
                               ) : (
-                                <span style={{ fontWeight: 900 }}>{s.slug}</span>
+                                <span style={{ fontWeight: 600 }}>{s.slug}</span>
                               )}
                             </span>
                           </div>
@@ -809,10 +837,17 @@ export default function Companies() {
                         />
                         <div className="jw-toolbar" style={{ justifyContent: "space-between", marginTop: 10 }}>
                           <span className="jw-badge subtle">Render</span>
-                          <select className="jw-select" style={{ width: 240 }} value={editCareerMode} onChange={(e) => setEditCareerMode(e.target.value)}>
-                            <option value="requests">requests (fast)</option>
-                            <option value="playwright">playwright (JS-rendered)</option>
-                          </select>
+                          <div style={{ width: 240 }}>
+                            <SelectMenu
+                              value={editCareerMode}
+                              onChange={setEditCareerMode}
+                              options={[
+                                { value: "requests", label: "requests (fast)" },
+                                { value: "playwright", label: "playwright (JS rendered)" },
+                              ]}
+                              ariaLabel="Edit render mode"
+                            />
+                          </div>
                         </div>
                       </div>
 
@@ -835,7 +870,7 @@ export default function Companies() {
 
                       <div className="jw-toolbar" style={{ justifyContent: "flex-end" }}>
                         <button className="jw-btn primary" onClick={saveEdits} disabled={saveLoading} type="button">
-                          {saveLoading ? "Saving…" : "Save"}
+                          {saveLoading ? "Saving..." : "Save"}
                         </button>
                       </div>
 
@@ -848,7 +883,7 @@ export default function Companies() {
               </div>
 
               <div className="jw-muted2" style={{ fontSize: 12 }}>
-                Tip: Keep companies in the list even without sources — discovery can populate them later.
+                Tip: Keep companies in the list even without sources. Discovery can populate them later.
               </div>
             </div>
           )}
@@ -857,3 +892,4 @@ export default function Companies() {
     </div>
   );
 }
+

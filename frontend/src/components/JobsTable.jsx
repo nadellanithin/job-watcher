@@ -1,9 +1,10 @@
-/* eslint-disable react-hooks/set-state-in-effect */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiGet } from "../api/client";
+import Icon from "./Icon.jsx";
+import SelectMenu from "./SelectMenu.jsx";
 
 function safeLocal(iso) {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString();
@@ -23,6 +24,47 @@ function toQuery(params) {
   return usp.toString();
 }
 
+function JobCard({ job }) {
+  const h1b = String(job.h1b_signal || "").toLowerCase();
+  const h1bBadge =
+    h1b === "yes"
+      ? { cls: "ok", label: "H-1B signal" }
+      : h1b === "no"
+      ? { cls: "danger", label: "No H-1B signal" }
+      : { cls: "subtle", label: "H-1B: unknown" };
+
+  return (
+    <div className="jw-carditem">
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+        <div style={{ minWidth: 0 }}>
+          <a href={job.url} target="_blank" rel="noreferrer" className="jw-joblink" title="Open job posting">
+            {job.title} <Icon name="external" size={13} />
+          </a>
+
+          <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <span className="jw-badge subtle">{job.company_name}</span>
+            {job.location ? <span className="jw-badge subtle">{job.location}</span> : null}
+          </div>
+
+          <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {job.source ? <span className="jw-badge subtle">{job.source}</span> : null}
+            {job.work_mode ? <span className="jw-badge subtle">{job.work_mode}</span> : null}
+            <span className={`jw-badge ${h1bBadge.cls}`}>{h1bBadge.label}</span>
+          </div>
+
+          <div style={{ marginTop: 10, color: "var(--muted2)", fontSize: 12 }}>First seen: {safeLocal(job.first_seen)}</div>
+        </div>
+
+        <div style={{ display: "grid", gap: 8 }}>
+          <a className="jw-btn primary small" href={job.url} target="_blank" rel="noreferrer">
+            Open
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function JobsTable({ scope, runId, settingsHash, onMetaChange }) {
   const [items, setItems] = useState([]);
   const [facets, setFacets] = useState({ sources: [], work_modes: [] });
@@ -34,59 +76,64 @@ export default function JobsTable({ scope, runId, settingsHash, onMetaChange }) 
   const [h1bOnly, setH1bOnly] = useState(false);
 
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(10);
 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-
-  const requestSeq = useRef(0);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [isCompact, setIsCompact] = useState(() => window.innerWidth <= 920);
 
   useEffect(() => {
-    setPage(1);
-  }, [q, source, workMode, h1bOnly, pageSize, scope, runId, settingsHash]);
+    const onResize = () => setIsCompact(window.innerWidth <= 920);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    const seq = ++requestSeq.current;
 
-    const run = async () => {
+    (async () => {
       setLoading(true);
       setErr("");
       try {
-        const qs = toQuery({
+        const params = {
           scope,
-          settings_hash: scope === "settings" ? (settingsHash || undefined) : undefined,
-          q: q.trim() || undefined,
-          source,
-          work_mode: workMode,
-          h1b_only: h1bOnly ? 1 : 0,
+          q: q?.trim() ? q.trim() : undefined,
+          source: source !== "all" ? normalizeFacetValue(source) : undefined,
+          work_mode: workMode !== "any" ? normalizeFacetValue(workMode) : undefined,
+          h1b_only: h1bOnly ? "1" : undefined,
           page,
           page_size: pageSize,
-        });
-        const data = await apiGet(`/api/jobs?${qs}`);
+        };
+
+        if (runId) params.run_id = runId;
+        if (settingsHash) params.settings_hash = settingsHash;
+
+        const qs = toQuery(params);
+        const res = await apiGet(`/api/jobs?${qs}`);
         if (cancelled) return;
-        if (seq !== requestSeq.current) return;
 
-        const nextItems = Array.isArray(data?.items) ? data.items : [];
-        const nextTotal = Number.isFinite(data?.total) ? data.total : 0;
-        const nextFacets = data?.facets || { sources: [], work_modes: [] };
+        setItems(Array.isArray(res?.items) ? res.items : []);
+        setTotal(Number(res?.total || 0));
 
-        setItems(nextItems);
-        setTotal(nextTotal);
+        const f = res?.facets || {};
         setFacets({
-          sources: (nextFacets.sources || []).map(normalizeFacetValue).filter(Boolean),
-          work_modes: (nextFacets.work_modes || []).map(normalizeFacetValue).filter(Boolean),
+          sources: Array.isArray(f.sources) ? f.sources : [],
+          work_modes: Array.isArray(f.work_modes) ? f.work_modes : Array.isArray(f.work_mode) ? f.work_mode : [],
         });
 
-        onMetaChange?.({ total: nextTotal, page, pageSize });
+        onMetaChange?.({
+          total: Number(res?.total || 0),
+          page: Number(res?.page || page),
+          pageSize: Number(res?.page_size || pageSize),
+        });
       } catch (e) {
-        if (!cancelled) setErr(String(e));
+        if (cancelled) return;
+        setErr(e?.message || String(e));
       } finally {
         if (!cancelled) setLoading(false);
       }
-    };
-
-    run();
+    })();
 
     return () => {
       cancelled = true;
@@ -101,87 +148,110 @@ export default function JobsTable({ scope, runId, settingsHash, onMetaChange }) 
   }, [safePage, page]);
 
   const showEmpty = !loading && !err && (!items || items.length === 0);
-
   const sourceOptions = useMemo(() => ["all", ...facets.sources], [facets.sources]);
   const workModeOptions = useMemo(() => ["any", ...facets.work_modes], [facets.work_modes]);
+
+  const clearFilters = () => {
+    setQ("");
+    setSource("all");
+    setWorkMode("any");
+    setH1bOnly(false);
+    setPage(1);
+  };
+
+  const filtersContent = (
+    <>
+      <div>
+        <div className="jw-label">Search</div>
+        <input className="jw-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="e.g. frontend, react, remote" />
+        <div className="jw-help" style={{ marginTop: 6 }}>
+          Searches company, title, location, and department.
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div>
+          <div className="jw-label">Source</div>
+          <SelectMenu
+            value={source}
+            onChange={setSource}
+            options={sourceOptions.map((s) => ({ value: s, label: s === "all" ? "All sources" : s }))}
+            ariaLabel="Source"
+          />
+        </div>
+        <div>
+          <div className="jw-label">Work mode</div>
+          <SelectMenu
+            value={workMode}
+            onChange={setWorkMode}
+            options={workModeOptions.map((m) => ({ value: m, label: m === "any" ? "Any" : m }))}
+            ariaLabel="Work mode"
+          />
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "end" }}>
+        <div>
+          <div className="jw-label">Rows</div>
+          <SelectMenu
+            value={pageSize}
+            onChange={(n) => setPageSize(Number(n))}
+            options={[10, 25, 50, 100].map((n) => ({ value: n, label: String(n) }))}
+            ariaLabel="Rows per page"
+          />
+        </div>
+
+        <label style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 4 }}>
+          <input type="checkbox" checked={h1bOnly} onChange={(e) => setH1bOnly(e.target.checked)} />
+          <div>
+            <div style={{ fontWeight: 500 }}>H-1B only</div>
+            <div className="jw-help">Optional signal and may exclude valid matches.</div>
+          </div>
+        </label>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <button className="jw-btn ghost" type="button" onClick={clearFilters}>
+          Clear filters
+        </button>
+        <button className="jw-btn primary" type="button" onClick={() => setFiltersOpen(false)}>
+          Apply
+        </button>
+      </div>
+    </>
+  );
 
   return (
     <div className="jw-card">
       <div className="jw-card-b" style={{ display: "grid", gap: 12 }}>
-        <div className="jw-toolbar" style={{ alignItems: "baseline", flexWrap: "wrap" }}>
-          <div style={{ minWidth: 280, flex: 1 }}>
-            <div className="jw-label">Search</div>
-            <input
-              className="jw-input"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="e.g. frontend, react native, Austin, remote…"
-            />
-            <div className="jw-muted2" style={{ marginTop: 6, fontSize: 11 }}>
-              company, title, location, dept…
-            </div>
+        {!isCompact ? (
+          <div style={{ display: "grid", gap: 12 }}>{filtersContent}</div>
+        ) : (
+          <div className="jw-toolbar" style={{ justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <span className="jw-badge subtle">{total} jobs</span>
+            <button className="jw-btn" type="button" onClick={() => setFiltersOpen(true)}>
+              <Icon name="filter" size={14} /> Filters
+            </button>
           </div>
+        )}
 
-          <div style={{ minWidth: 180 }}>
-            <div className="jw-label">Source</div>
-            <select className="jw-select" value={source} onChange={(e) => setSource(e.target.value)}>
-              {sourceOptions.map((s) => (
-                <option key={s} value={s}>
-                  {s === "all" ? "All sources" : s}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div style={{ minWidth: 180 }}>
-            <div className="jw-label">Work mode</div>
-            <select className="jw-select" value={workMode} onChange={(e) => setWorkMode(e.target.value)}>
-              {workModeOptions.map((m) => (
-                <option key={m} value={m}>
-                  {m === "any" ? "Any" : m}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div style={{ minWidth: 120 }}>
-            <div className="jw-label">Rows</div>
-            <select className="jw-select" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
-              {[10, 25, 50, 100].map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div style={{ display: "flex", gap: 12, alignItems: "end", justifyContent: "space-between", width: "100%", flexWrap: "wrap" }}>
-            <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-              <input type="checkbox" checked={h1bOnly} onChange={(e) => setH1bOnly(e.target.checked)} />
-              <span style={{ fontWeight: 800 }}>Show H-1B only</span>
-              <span className="jw-muted2" style={{ fontSize: 11 }}>
-                (optional signal)
-              </span>
-            </label>
-
-            <div className="jw-toolbar" style={{ marginLeft: "auto", alignItems: "center" }}>
-              <span className="jw-badge subtle">{total} jobs</span>
-              <button className="jw-btn small" onClick={() => setPage(1)} disabled={safePage <= 1} type="button">
-                ⟪ First
-              </button>
-              <button className="jw-btn small" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1} type="button">
-                ← Prev
-              </button>
-              <span className="jw-badge subtle">
-                Page <b>{safePage}</b> / <b>{totalPages}</b>
-              </span>
-              <button className="jw-btn small" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages} type="button">
-                Next →
-              </button>
-              <button className="jw-btn small" onClick={() => setPage(totalPages)} disabled={safePage >= totalPages} type="button">
-                Last ⟫
-              </button>
-            </div>
+        <div className="jw-toolbar" style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
+          <span className="jw-badge subtle">
+            Page <b>{safePage}</b> / <b>{totalPages}</b>
+          </span>
+          <div className="jw-toolbar" style={{ flexWrap: "wrap" }}>
+            <button className="jw-btn small" onClick={() => setPage(1)} disabled={safePage <= 1} type="button">
+              First
+            </button>
+            <button className="jw-btn small" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1} type="button">
+              Prev
+            </button>
+            <button className="jw-btn small" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages} type="button">
+              Next
+            </button>
+            <button className="jw-btn small" onClick={() => setPage(totalPages)} disabled={safePage >= totalPages} type="button">
+              Last
+            </button>
           </div>
         </div>
 
@@ -194,57 +264,90 @@ export default function JobsTable({ scope, runId, settingsHash, onMetaChange }) 
           </div>
         ) : null}
 
-        {loading ? <div className="jw-muted">Loading…</div> : null}
-
+        {loading ? <div className="jw-muted">Loading...</div> : null}
         {showEmpty ? <div className="jw-empty">No matches. Try clearing filters or searching a different keyword.</div> : null}
 
         {!showEmpty && items?.length ? (
-          <div className="jw-tablewrap">
-            <table className="jw-table">
-              <thead>
-                <tr>
-                  <th align="left">Company</th>
-                  <th align="left">Role</th>
-                  <th align="left">Location</th>
-                  <th align="left">Source</th>
-                  <th align="left">Work</th>
-                  <th align="left">H-1B</th>
-                  <th align="left">First seen</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((j) => (
-                  <tr key={j.dedupe_key}>
-                    <td style={{ fontWeight: 900 }}>{j.company_name}</td>
-                    <td>
-                      <a
-                        href={j.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{
-                          fontWeight: 600,
-                          textDecoration: "underline",
-                          textDecorationStyle: "dashed",
-                          textUnderlineOffset: "4px",
-                        }}
-                        title="Open job posting"
-                      >
-                        {j.title} <span style={{ fontWeight: 700 }}>↗</span>
-                      </a>
-                      {j.department ? <div className="jw-muted2">{j.department}</div> : null}
-                    </td>
-                    <td className="jw-muted">{j.location || "—"}</td>
-                    <td className="jw-muted">{j.source_type}</td>
-                    <td className="jw-muted">{j.work_mode || "unknown"}</td>
-                    <td>{j.past_h1b_support === "yes" ? <span className="jw-badge ok">Yes</span> : <span className="jw-badge subtle">—</span>}</td>
-                    <td className="jw-muted">{safeLocal(j.first_seen)}</td>
+          <>
+            <div className="jw-only-desktop jw-tablewrap">
+              <table className="jw-table">
+                <thead>
+                  <tr>
+                    <th align="left">Company</th>
+                    <th align="left">Role</th>
+                    <th align="left">Location</th>
+                    <th align="left">Source</th>
+                    <th align="left">Work</th>
+                    <th align="left">H-1B</th>
+                    <th align="left">First seen</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {items.map((job) => (
+                    <tr key={job.dedupe_key}>
+                      <td style={{ fontWeight: 600 }}>{job.company_name}</td>
+                      <td>
+                        <a href={job.url} target="_blank" rel="noreferrer" className="jw-joblink" title="Open job posting">
+                          {job.title} <Icon name="external" size={13} />
+                        </a>
+                        {job.department ? <div style={{ color: "var(--muted2)", fontSize: 12, marginTop: 4 }}>{job.department}</div> : null}
+                      </td>
+                      <td style={{ color: "var(--muted)" }}>{job.location || "-"}</td>
+                      <td style={{ color: "var(--muted)" }}>{job.source || "-"}</td>
+                      <td style={{ color: "var(--muted)" }}>{job.work_mode || "-"}</td>
+                      <td>
+                        {String(job.h1b_signal || "").toLowerCase() === "yes" ? (
+                          <span className="jw-badge ok">Yes</span>
+                        ) : String(job.h1b_signal || "").toLowerCase() === "no" ? (
+                          <span className="jw-badge danger">No</span>
+                        ) : (
+                          <span className="jw-badge subtle">-</span>
+                        )}
+                      </td>
+                      <td style={{ color: "var(--muted2)", fontSize: 12 }}>{safeLocal(job.first_seen)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="jw-only-mobile jw-cardlist">
+              {items.map((job) => (
+                <JobCard key={job.dedupe_key} job={job} />
+              ))}
+            </div>
+          </>
+        ) : null}
+
+        {isCompact && filtersOpen ? (
+          <>
+            <div className="jw-sheet-overlay open" onClick={() => setFiltersOpen(false)} />
+            <div className="jw-sheet open" role="dialog" aria-modal="true" aria-label="Filters">
+              <div className="jw-sheet-h">
+                <div className="jw-sheet-title">Filters</div>
+                <button className="jw-btn small" type="button" onClick={() => setFiltersOpen(false)}>
+                  Close
+                </button>
+              </div>
+              <div className="jw-sheet-b">{filtersContent}</div>
+            </div>
+          </>
         ) : null}
       </div>
+
+      <style>{`
+        .jw-joblink{
+          font-weight: 600;
+          text-decoration: underline;
+          text-decoration-style: dashed;
+          text-underline-offset: 4px;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          color: var(--text);
+        }
+      `}</style>
     </div>
   );
 }
+

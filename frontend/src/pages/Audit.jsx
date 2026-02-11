@@ -1,84 +1,267 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { apiDelete, apiGet, apiPost, apiPut } from "../api/client.js";
+import Icon from "../components/Icon.jsx";
+import SelectMenu from "../components/SelectMenu.jsx";
 
-function fmtDate(s) {
-  if (!s) return "";
+function fmtDate(value) {
+  if (!value) return "-";
   try {
-    const d = new Date(s);
+    const d = new Date(value);
     return d.toLocaleString();
   } catch {
-    return s;
+    return value;
   }
 }
 
 function normalizeReasons(v) {
   if (!Array.isArray(v)) return [];
+  const prettify = (token) =>
+    String(token ?? "")
+      .replace(/_/g, " ")
+      .trim();
+
+  const humanize = (text) => {
+    const parts = String(text || "")
+      .split(":")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (!parts.length) return "";
+
+    if (parts[0] === "score") {
+      if (parts[1] === "total") {
+        const total = parts[2] ?? "?";
+        const thresholdIdx = parts.indexOf("threshold");
+        const threshold = thresholdIdx >= 0 ? parts[thresholdIdx + 1] : null;
+        return threshold
+          ? `Score total ${total} (threshold ${threshold})`
+          : `Score total ${total}`;
+      }
+
+      const delta = parts[1] || "";
+      const decision = parts[2] || "";
+      const detailParts = parts.slice(3);
+      const details = [];
+      for (let i = 0; i < detailParts.length; ) {
+        const key = detailParts[i];
+        const next = detailParts[i + 1];
+        const after = detailParts[i + 2];
+
+        if (key === "description" && next === "word" && after) {
+          details.push(`Description contains "${prettify(after)}"`);
+          i += 3;
+          continue;
+        }
+
+        if (key && next !== undefined) {
+          details.push(`${prettify(key)}: ${prettify(next)}`);
+          i += 2;
+          continue;
+        }
+
+        if (key) details.push(prettify(key));
+        i += 1;
+      }
+
+      const head = `Score ${delta}${decision ? ` ${decision}` : ""}`.trim();
+      return details.length ? `${head} - ${details.join(", ")}` : head;
+    }
+
+    if (parts.length > 1) {
+      return `${prettify(parts[0])}: ${parts
+        .slice(1)
+        .map((p) => prettify(p))
+        .join(" | ")}`;
+    }
+    return prettify(parts[0]);
+  };
+
   return v
-    .map((x) => String(x || "").replace(/[\r\n\t]+/g, " ").replace(/^\*+\s*/, "").trim())
+    .map((x) =>
+      String(x ?? "")
+        .replace(/[\r\n]+/g, " ")
+        .replace(/^\*+\s*/, "")
+        .trim()
+    )
+    .map((x) => humanize(x))
     .filter(Boolean);
 }
 
-function titleCaseWords(s) {
-  return String(s || "")
-    .split(/[_\s]+/)
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+function normalizeFeedbackLabel(label) {
+  if (label === "applied") return "include";
+  return label || "";
 }
 
-function prettyReason(raw) {
-  const clean = String(raw || "").replace(/[\r\n\t]+/g, " ").replace(/^\*+\s*/, "").trim();
-  if (!clean) return "-";
+function feedbackBadgeMeta(label) {
+  const normalized = normalizeFeedbackLabel(label);
+  if (normalized === "include") return { className: "ok", text: "Feedback include" };
+  if (normalized === "exclude") return { className: "danger", text: "Feedback exclude" };
+  if (normalized === "ignore") return { className: "warn", text: "Feedback ignore" };
+  if (!normalized) return { className: "subtle", text: "No feedback" };
+  return { className: "subtle", text: `Feedback ${String(normalized)}` };
+}
 
-  const parts = clean.split(":").map((p) => p.trim()).filter(Boolean);
-  if (parts.length >= 2) {
-    const key = titleCaseWords(parts[0]);
-    const status = titleCaseWords(parts[1]).toLowerCase();
-    const value = parts.slice(2).join(":").trim();
-    if (value) return `${key}: ${status} - ${value}`;
-    return `${key}: ${status}`;
+function DecisionBlock({ item, compact = false }) {
+  const included = !!item?.included;
+  const hasOverride = item?.override_action === "include" || item?.override_action === "exclude";
+  const overrideClass = hasOverride ? (item.override_action === "include" ? "ok" : "danger") : "subtle";
+  const overrideText = hasOverride ? `Forced ${item.override_action}` : "Auto decision";
+  const feedback = feedbackBadgeMeta(item?.feedback_label);
+
+  return (
+    <div className={`jw-audit-decision-card ${included ? "ok" : "danger"} ${compact ? "compact" : ""}`}>
+      <div className="jw-audit-decision-head">
+        <span className={`jw-audit-decision-dot ${included ? "ok" : "danger"}`} />
+        <div>
+          <div className="jw-audit-decision-title">{included ? "Included" : "Excluded"}</div>
+          {!compact ? <div className="jw-audit-decision-sub">{hasOverride ? "Manual override active" : "Rule-based decision"}</div> : null}
+        </div>
+      </div>
+      <div className="jw-audit-decision-tags">
+        <span className={`jw-badge ${overrideClass}`}>{overrideText}</span>
+        <span className={`jw-badge ${feedback.className}`}>{feedback.text}</span>
+      </div>
+    </div>
+  );
+}
+
+function FeedbackButtons({ value, onChange }) {
+  const current = normalizeFeedbackLabel(value);
+  const options = [
+    { value: "include", label: "Mark include", className: "ok" },
+    { value: "exclude", label: "Mark exclude", className: "danger" },
+    { value: "ignore", label: "Mark ignore", className: "warn" },
+  ];
+
+  return (
+    <div className="jw-audit-feedback-group" role="group" aria-label="Set feedback">
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          className={`jw-audit-feedback-btn ${opt.className} ${current === opt.value ? "active" : ""}`}
+          type="button"
+          onClick={() => {
+            if (opt.value === current) return;
+            onChange(opt.value);
+          }}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function OverrideButton({ row, onSetOverride, onClearOverride }) {
+  const activeOverride = row.override_action === "include" || row.override_action === "exclude" ? row.override_action : "";
+  const included = !!row.included;
+
+  if (activeOverride) {
+    return (
+      <button className="jw-btn small" type="button" onClick={() => onClearOverride(row.dedupe_key)}>
+        Remove forced {activeOverride}
+      </button>
+    );
   }
-  return clean;
+
+  const desired = included ? "exclude" : "include";
+  return (
+    <button
+      className={`jw-btn ${desired === "include" ? "primary" : "danger"} small`}
+      type="button"
+      onClick={() => onSetOverride(row.dedupe_key, desired)}
+    >
+      {desired === "include" ? "Force include" : "Force exclude"}
+    </button>
+  );
 }
 
+function AuditCard({ item, onSetOverride, onClearOverride, onSetFeedback }) {
+  const reasons = normalizeReasons(item.reasons);
+  const sourceText = item.source_type || item.source || "Unknown";
 
-function badgeForFeedback(label) {
-  if (!label) return null;
-  const l = String(label);
-  const cls = l === "applied" || l === "include" ? "ok" : l === "exclude" ? "bad" : "warn";
-  return <span className={`jw-pill ${cls}`}>{l}</span>;
+  return (
+    <div className="jw-carditem">
+      <div className="jw-audit-card-head">
+        <DecisionBlock item={item} compact />
+        <div className="jw-audit-card-meta">
+          {item.work_mode ? <span className="jw-badge subtle">{item.work_mode}</span> : null}
+          <span className="jw-badge subtle">{sourceText}</span>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10 }}>
+        {item.url ? (
+          <a href={item.url} target="_blank" rel="noreferrer" className="jw-joblink">
+            {item.title} <Icon name="external" size={13} />
+          </a>
+        ) : (
+          <div style={{ fontWeight: 600 }}>{item.title}</div>
+        )}
+
+        <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span className="jw-audit-company">{item.company_name || "-"}</span>
+          {item.location ? <span className="jw-help">{item.location}</span> : null}
+          <span className="jw-help">{sourceText}</span>
+          <span className="jw-help">{fmtDate(item.created_at)}</span>
+        </div>
+      </div>
+
+      <details className="jw-audit-reasons" style={{ marginTop: 10 }}>
+        <summary>
+          <Icon name="chevronRight" size={13} className="jw-audit-reason-caret" />
+          <span>Reasons ({reasons.length || 0})</span>
+        </summary>
+        <div className="jw-audit-reason-list">
+          {reasons.length ? (
+            reasons.map((x, i) => (
+              <div key={i}>
+                <span className="jw-audit-reason-arrow">{">"}</span>
+                <span>{x}</span>
+              </div>
+            ))
+          ) : (
+            <div>No reasons recorded.</div>
+          )}
+        </div>
+      </details>
+
+      <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+        <div className="jw-audit-actions">
+          <OverrideButton row={item} onSetOverride={onSetOverride} onClearOverride={onClearOverride} />
+          <FeedbackButtons value={item.feedback_label} onChange={(next) => onSetFeedback(item.dedupe_key, next)} />
+        </div>
+        <span className="jw-badge subtle" title="Last evaluated at">
+          {fmtDate(item.created_at)}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 export default function Audit() {
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const runIdParam = searchParams.get("run_id") || "";
-  const outcomeParam = searchParams.get("outcome") || "all";
-  const qParam = searchParams.get("q") || "";
-
   const [runs, setRuns] = useState([]);
-  const [runId, setRunId] = useState(runIdParam);
-  const [outcome, setOutcome] = useState(outcomeParam);
-  const [q, setQ] = useState(qParam);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
-
-  // Responsive rendering: tables are great on wide screens, but on narrow
-  // screens horizontal scrolling is easy to miss. We'll switch to cards.
-  const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1100);
-  useEffect(() => {
-    const onResize = () => setIsNarrow(window.innerWidth < 1100);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  const tableWrapRef = useRef(null);
-  const [tableScrollable, setTableScrollable] = useState(false);
+  const [runId, setRunId] = useState(searchParams.get("run_id") || "");
+  const [outcome, setOutcome] = useState(searchParams.get("outcome") || "all");
+  const [q, setQ] = useState(searchParams.get("q") || "");
+  const [page, setPage] = useState(Number(searchParams.get("page") || 1));
+  const [pageSize, setPageSize] = useState(Number(searchParams.get("page_size") || 10));
 
   const [data, setData] = useState({ items: [], total: 0, meta: {} });
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 767);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const tableWrapRef = useRef(null);
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth <= 767);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -87,9 +270,7 @@ export default function Audit() {
         if (!alive) return;
         setRuns(rows || []);
       })
-      .catch(() => {
-        // Ignore failure; audit can still load from URL params.
-      });
+      .catch(() => {});
     return () => {
       alive = false;
     };
@@ -100,9 +281,11 @@ export default function Audit() {
     if (runId) sp.run_id = runId;
     if (outcome && outcome !== "all") sp.outcome = outcome;
     if (q && q.trim()) sp.q = q.trim();
+    sp.page = String(page);
+    sp.page_size = String(pageSize);
     setSearchParams(sp, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId, outcome, q]);
+  }, [runId, outcome, q, page, pageSize]);
 
   const fetchAudit = async () => {
     setLoading(true);
@@ -114,7 +297,6 @@ export default function Audit() {
       if (q && q.trim()) params.set("q", q.trim());
       params.set("page", String(page));
       params.set("page_size", String(pageSize));
-
       const res = await apiGet(`/api/audit?${params.toString()}`);
       setData(res || { items: [], total: 0, meta: {} });
     } catch (e) {
@@ -129,444 +311,482 @@ export default function Audit() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId, outcome, q, page, pageSize]);
 
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(Number(data.total || 0) / pageSize)), [data.total, pageSize]);
   useEffect(() => {
-    if (isNarrow) {
-      setTableScrollable(false);
-      return;
-    }
-    const el = tableWrapRef.current;
-    if (!el) return;
-    const t = window.setTimeout(() => {
-      setTableScrollable(el.scrollWidth > el.clientWidth + 8);
-    }, 0);
-    return () => window.clearTimeout(t);
-  }, [data, isNarrow]);
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
-  const totalPages = useMemo(() => {
-    const t = Number(data?.total || 0);
-    return Math.max(1, Math.ceil(t / pageSize));
-  }, [data?.total, pageSize]);
-
-  const onForce = async (dedupeKey, action) => {
-    try {
-      await apiPut(`/api/overrides/${encodeURIComponent(dedupeKey)}`, { action });
-      await fetchAudit();
-    } catch (e) {
-      alert(e?.message || "Override failed");
-    }
+  const onSetOverride = async (dedupeKey, action) => {
+    await apiPut(`/api/overrides/${encodeURIComponent(dedupeKey)}`, { action, note: "" });
+    fetchAudit();
   };
 
-  const onClear = async (dedupeKey) => {
-    try {
-      await apiDelete(`/api/overrides/${encodeURIComponent(dedupeKey)}`);
-      await fetchAudit();
-    } catch (e) {
-      alert(e?.message || "Clear override failed");
-    }
+  const onClearOverride = async (dedupeKey) => {
+    await apiDelete(`/api/overrides/${encodeURIComponent(dedupeKey)}`);
+    fetchAudit();
   };
 
-  const onFeedback = async (dedupeKey, label) => {
-    try {
-      await apiPost("/api/feedback", { dedupe_key: dedupeKey, label, reason_category: "manual" });
-      await fetchAudit();
-    } catch (e) {
-      alert(e?.message || "Feedback failed");
-    }
+  const onSetFeedback = async (dedupeKey, label) => {
+    await apiPost("/api/feedback", { dedupe_key: dedupeKey, label, reason_category: "" });
+    fetchAudit();
   };
+
+  const clearFilters = () => {
+    setOutcome("all");
+    setQ("");
+    setPage(1);
+  };
+
+  const filtersContent = (
+    <div className="jw-audit-filters-stack">
+      <div className="jw-audit-filters-grid">
+        <div>
+          <div className="jw-label">Run</div>
+          <SelectMenu
+            value={runId}
+            onChange={setRunId}
+            options={[{ value: "", label: "Latest" }, ...runs.map((r) => ({ value: r.run_id, label: `${fmtDate(r.started_at)} - ${r.run_id?.slice(0, 8)}` }))]}
+            ariaLabel="Run"
+          />
+        </div>
+
+        <div>
+          <div className="jw-label">Outcome</div>
+          <SelectMenu
+            value={outcome}
+            onChange={setOutcome}
+            options={[
+              { value: "all", label: "All" },
+              { value: "included", label: "Included" },
+              { value: "excluded", label: "Excluded" },
+            ]}
+            ariaLabel="Outcome"
+          />
+        </div>
+
+        <div>
+          <div className="jw-label">Rows</div>
+          <SelectMenu
+            value={pageSize}
+            onChange={(n) => setPageSize(Number(n))}
+            options={[10, 25, 50, 100].map((n) => ({ value: n, label: String(n) }))}
+            ariaLabel="Rows per page"
+          />
+        </div>
+      </div>
+
+      <div>
+        <div className="jw-label">Search</div>
+        <input className="jw-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="company, title, location, url, reason" />
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <button className="jw-btn ghost" type="button" onClick={clearFilters}>
+          Clear filters
+        </button>
+        {isMobile ? (
+          <button className="jw-btn primary" type="button" onClick={() => setFiltersOpen(false)}>
+            Apply
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
 
   return (
-    <div style={{ display: "grid", gap: 14 }}>
-      <div className="jw-card" style={{ background: "var(--surface2)" }}>
-        <div
-          className="jw-card-b"
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 12,
-            alignItems: "center",
-            flexWrap: "wrap",
-            paddingTop: 12,
-            paddingBottom: 12,
-          }}
-        >
-          <div style={{ minWidth: 280 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span className="jw-badge subtle">Audit</span>
-              <span className="jw-badge subtle">{data.total || 0} rows</span>
-              {data?.meta?.run_id ? (
-                <span className="jw-badge ok">run_id {data.meta.run_id}</span>
-              ) : (
-                <span className="jw-badge subtle">Latest run</span>
-              )}
-            </div>
-            <div className="jw-muted2" style={{ marginTop: 8, fontSize: 12 }}>
-              See included and excluded jobs, then force include or exclude overrides.
-            </div>
+    <div className="jw-page-shell jw-audit-page">
+      <div className="jw-page-hero">
+        <div className="jw-page-hero-main">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span className="jw-badge subtle">
+              <Icon name="shield" size={13} /> Audit
+            </span>
+            <span className="jw-badge subtle">{data.total || 0} rows</span>
+            {data?.meta?.run_id ? <span className="jw-badge ok">run {String(data.meta.run_id).slice(0, 8)}</span> : <span className="jw-badge subtle">Latest run</span>}
           </div>
+          <h1 className="jw-page-hero-title">Decision audit trail</h1>
+          <p className="jw-page-hero-sub">Review decisions, force include or exclude when needed, and save feedback labels for future runs.</p>
+        </div>
+
+        <div className="jw-audit-hero-actions">
+          {isMobile ? (
+            <button className="jw-btn" type="button" onClick={() => setFiltersOpen(true)}>
+              <Icon name="filter" size={14} /> Filters
+            </button>
+          ) : null}
         </div>
       </div>
 
-      <div className="jw-card">
-        <div className="jw-card-h">
-          <div className="jw-card-title">Filters</div>
+      {!isMobile ? (
+        <div className="jw-card">
+          <div className="jw-card-h" style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div className="jw-card-title">Filters</div>
+            <span className="jw-badge subtle">{outcome === "all" ? "All outcomes" : `Outcome: ${outcome}`}</span>
+          </div>
+          <div className="jw-card-b">{filtersContent}</div>
         </div>
+      ) : null}
 
-        <div className="jw-card-b">
-          <div className="jw-toolbar" style={{ gap: 10, flexWrap: "wrap", alignItems: "end" }}>
-            <div style={{ minWidth: 240 }}>
-              <div className="jw-label">Run</div>
-              <select
-                className="jw-select"
-                value={runId}
-                onChange={(e) => {
-                  setRunId(e.target.value);
-                  setPage(1);
-                }}
-              >
-                <option value="">Latest</option>
-                {runs.map((r) => (
-                  <option key={r.run_id} value={r.run_id}>
-                    {fmtDate(r.started_at)}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div style={{ minWidth: 180 }}>
-              <div className="jw-label">Outcome</div>
-              <select
-                className="jw-select"
-                value={outcome}
-                onChange={(e) => {
-                  setOutcome(e.target.value);
-                  setPage(1);
-                }}
-              >
-                <option value="all">All</option>
-                <option value="included">Included</option>
-                <option value="excluded">Excluded</option>
-              </select>
-            </div>
-
-            <div style={{ flex: 1, minWidth: 260 }}>
-              <div className="jw-label">Search</div>
-              <input
-                className="jw-input"
-                value={q}
-                onChange={(e) => {
-                  setQ(e.target.value);
-                  setPage(1);
-                }}
-                placeholder="company / title / location / url / reasons"
-              />
-            </div>
-
-            <div style={{ minWidth: 150 }}>
-              <div className="jw-label">Rows</div>
-              <select
-                className="jw-select"
-                value={pageSize}
-                onChange={(e) => {
-                  setPageSize(Number(e.target.value));
-                  setPage(1);
-                }}
-              >
-                {[25, 50, 100, 200].map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            </div>
+      {err ? (
+        <div className="jw-alert">
+          <b>Error</b>
+          <div style={{ marginTop: 6 }} className="jw-muted">
+            {err}
           </div>
         </div>
-      </div>
+      ) : null}
 
-      <div className="jw-card">
-        <div
-          className="jw-card-h"
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 10,
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          <div>
-            <div className="jw-card-title">Results</div>
-            <div className="jw-muted2" style={{ marginTop: 6, fontSize: 12 }}>
-              {loading ? "Loading..." : `${data.total || 0} rows`}
-              {data?.meta?.run_id ? ` - run_id ${data.meta.run_id}` : ""}
-            </div>
-          </div>
-
-          <div className="jw-toolbar">
-            <button
-              className="jw-btn small"
-              type="button"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page <= 1}
-            >
+      {data.total ? (
+        <div className="jw-toolbar" style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
+          <span className="jw-badge subtle">
+            Page <b>{page}</b> / <b>{totalPages}</b>
+          </span>
+          <div className="jw-toolbar" style={{ flexWrap: "wrap" }}>
+            <button className="jw-btn small" onClick={() => setPage(1)} disabled={page <= 1} type="button">
+              First
+            </button>
+            <button className="jw-btn small" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} type="button">
               Prev
             </button>
-            <span className="jw-badge subtle">
-              Page <b>{page}</b> / <b>{totalPages}</b>
-            </span>
-            <button
-              className="jw-btn small"
-              type="button"
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page >= totalPages}
-            >
+            <button className="jw-btn small" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages} type="button">
               Next
+            </button>
+            <button className="jw-btn small" onClick={() => setPage(totalPages)} disabled={page >= totalPages} type="button">
+              Last
             </button>
           </div>
         </div>
+      ) : null}
 
-        <div className="jw-card-b" style={{ display: "grid", gap: 12 }}>
-          {err ? <div className="jw-alert">{err}</div> : null}
+      {loading ? <div className="jw-muted">Loading...</div> : null}
+      {!loading && !err && (!data.items || data.items.length === 0) ? <div className="jw-empty">No results for these filters.</div> : null}
 
-          {isNarrow ? (
-            <div className="jw-audit-cards">
-              {(data.items || []).map((r) => {
-                const included = Number(r.included) === 1;
-                const oa = (r.override_action || "").toLowerCase();
-                const reasons = normalizeReasons(r.reasons);
-                const fbLabel = (r.feedback_label || "").toLowerCase();
-                return (
-                  <div key={r.dedupe_key} className="jw-audit-card">
-                    <div className="jw-audit-card-top">
-                      <span className={`jw-badge ${included ? "ok" : "danger"}`}>{included ? "Included" : "Excluded"}</span>
-                      {oa ? <span className={`jw-badge ${oa === "include" ? "ok" : "danger"}`}>Override: {oa}</span> : null}
-                      {badgeForFeedback(fbLabel)}
-                    </div>
-
-                    <div className="jw-audit-card-title">
-                      {r.url ? (
-                        <a href={r.url} target="_blank" rel="noreferrer">
-                          {r.title} <span style={{ fontWeight: 800 }}>↗</span>
-                        </a>
-                      ) : (
-                        r.title
-                      )}
-                    </div>
-                    <div className="jw-muted2" style={{ fontSize: 12 }}>
-                      <b style={{ color: "var(--text)" }}>{r.company_name}</b> · {r.location || "-"} · {r.source_type}
-                    </div>
-
-                    {reasons.length ? (
-                      <details className="jw-audit-reasons">
-                        <summary className="jw-audit-reasons-summary">Reasons ({reasons.length})</summary>
-                        <div className="jw-audit-reasons-body">
-                          {reasons.map((reason, idx) => (
-                            <div key={`${r.dedupe_key}-rs-${idx}`} className="jw-muted2" style={{ fontSize: 12, lineHeight: 1.35 }}>
-                              • {prettyReason(reason)}
-                            </div>
-                          ))}
-                        </div>
-                      </details>
-                    ) : null}
-
-                    <div className="jw-audit-card-actions">
-                      <div className="jw-row" style={{ gap: 8, flexWrap: "wrap" }}>
-                        {oa ? (
-                          <button className="jw-btn small" type="button" onClick={() => onClear(r.dedupe_key)}>
-                            Clear override
-                          </button>
-                        ) : !included ? (
-                          <button className="jw-btn small" type="button" onClick={() => onForce(r.dedupe_key, "include")}>
-                            Force include
-                          </button>
-                        ) : (
-                          <button className="jw-btn small" type="button" onClick={() => onForce(r.dedupe_key, "exclude")}>
-                            Force exclude
-                          </button>
-                        )}
-
-                        <details className="jw-menu">
-                          <summary className="jw-btn small">Feedback</summary>
-                          <div className="jw-menu-panel">
-                            <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "applied")}>Applied</button>
-                            <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "include")}>Relevant</button>
-                            <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "exclude")}>Not relevant</button>
-                            <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "ignore")}>Ignore</button>
-                          </div>
-                        </details>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {!loading && (!data.items || data.items.length === 0) ? (
-                <div className="jw-muted" style={{ padding: 14 }}>No rows.</div>
-              ) : null}
-            </div>
-          ) : (
-            <div
-              ref={tableWrapRef}
-              className="jw-tablewrap"
-              data-scroll={tableScrollable ? "1" : "0"}
-              style={{ overflowX: "auto" }}
-            >
-              <table className="jw-table" style={{ tableLayout: "fixed", minWidth: 980 }}>
+      {!loading && !err && data.items?.length ? (
+        <>
+          <div className="jw-only-desktop jw-tablewrap" ref={tableWrapRef}>
+            <table className="jw-table">
               <thead>
                 <tr>
-                  <th style={{ width: 110 }}>Outcome</th>
-                  <th style={{ width: 160 }}>Company</th>
-                  <th style={{ width: 275 }}>Title</th>
-                  <th style={{ width: 180 }}>Location</th>
-                  <th style={{ width: 150 }}>Source</th>
-                  <th style={{ width: 240 }}>Reasons</th>
-                  <th style={{ width: 180 }}>Override</th>
-                  <th style={{ width: 220 }}>Feedback</th>
+                  <th style={{ minWidth: 260 }}>Job</th>
+                  <th style={{ minWidth: 320 }}>Decision</th>
+                  <th style={{ minWidth: 320 }}>Reasons</th>
+                  <th style={{ minWidth: 320 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {(data.items || []).map((r) => {
-                  const included = Number(r.included) === 1;
-                  const oa = (r.override_action || "").toLowerCase();
-                  const reasons = normalizeReasons(r.reasons);
-                  const shownReasons = reasons.slice(0, 3);
-                  const extraReasons = Math.max(0, reasons.length - shownReasons.length);
-                  const overrideClass = oa === "include" ? "ok" : oa === "exclude" ? "danger" : "subtle";
-
-                  const fbLabel = (r.feedback_label || "").toLowerCase();
-                  const fbCat = (r.feedback_reason_category || "").toLowerCase();
-                  const fbAt = r.feedback_created_at || "";
+                {data.items.map((item) => {
+                  const reasons = normalizeReasons(item.reasons);
+                  const sourceText = item.source_type || item.source || "Unknown";
 
                   return (
-                    <tr key={r.dedupe_key}>
+                    <tr key={item.dedupe_key}>
                       <td style={{ verticalAlign: "top" }}>
-                        <span className={`jw-badge ${included ? "ok" : "danger"}`}>
-                          {included ? "Included" : "Excluded"}
-                        </span>
-                      </td>
-                      <td style={{ verticalAlign: "top", fontWeight: 800 }}>{r.company_name}</td>
-                      <td style={{ verticalAlign: "top" }}>
-                        {r.url ? (
-                          <a
-                            href={r.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{
-                              fontWeight: 600,
-                              textDecoration: "underline",
-                              textDecorationStyle: "dashed",
-                              textUnderlineOffset: "4px",
-                            }}
-                          >
-                            {r.title} <span style={{ fontWeight: 700 }}>↗</span>
+                        {item.url ? (
+                          <a href={item.url} target="_blank" rel="noreferrer" className="jw-joblink">
+                            {item.title} <Icon name="external" size={13} />
                           </a>
                         ) : (
-                          <span style={{ fontWeight: 600 }}>{r.title}</span>
+                          <span style={{ fontWeight: 600 }}>{item.title}</span>
                         )}
-                      </td>
-                      <td className="jw-muted" style={{ verticalAlign: "top" }}>
-                        {r.location || "-"}
-                      </td>
-                      <td style={{ verticalAlign: "top" }}>
-                        <span>{r.source_type}</span>
-                      </td>
-                      <td style={{ verticalAlign: "top" }}>
-                        {!shownReasons.length ? (
-                          <span className="jw-muted2">-</span>
-                        ) : (
-                          <div style={{ display: "grid", gap: 5 }}>
-                            {shownReasons.map((reason, idx) => (
-                              <div
-                                key={`${r.dedupe_key}-reason-${idx}`}
-                                className="jw-muted2"
-                                style={{
-                                  fontSize: 12,
-                                  lineHeight: 1.3,
-                                  display: "flex",
-                                  gap: 6,
-                                  alignItems: "flex-start",
-                                }}
-                              >
-                                <span style={{ fontSize: 10, lineHeight: "16px" }}>*</span>
-                                <span>{prettyReason(reason)}</span>
-                              </div>
-                            ))}
-                            {extraReasons > 0 ? (
-                              <span className="jw-badge subtle" style={{ width: "fit-content", marginTop: 2 }}>
-                                +{extraReasons} more
-                              </span>
-                            ) : null}
-                          </div>
-                        )}
-                      </td>
-                      <td style={{ verticalAlign: "top" }}>
-                        <div className="jw-row" style={{ gap: 8, flexWrap: "wrap" }}>
-                          {oa ? (
-                            <>
-                              <span
-                                className={`jw-pill ${overrideClass}`}
-                                style={{ margin: 0, borderRadius: 10, textTransform: "capitalize" }}
-                              >
-                                Override: {oa}
-                              </span>
-                              <button className="jw-btn small" type="button" onClick={() => onClear(r.dedupe_key)}>
-                                Clear
-                              </button>
-                            </>
-                          ) : !included ? (
-                            <button
-                              className="jw-btn small"
-                              type="button"
-                              onClick={() => onForce(r.dedupe_key, "include")}
-                            >
-                              Force include
-                            </button>
-                          ) : (
-                            <button
-                              className="jw-btn small"
-                              type="button"
-                              onClick={() => onForce(r.dedupe_key, "exclude")}
-                            >
-                              Force exclude
-                            </button>
-                          )}
+                        <div className="jw-audit-jobmeta">
+                          <span className="jw-audit-company">{item.company_name || "-"}</span>
+                          {item.location ? <span>{item.location}</span> : null}
+                          <span>{sourceText}</span>
+                          <span>{fmtDate(item.created_at)}</span>
                         </div>
                       </td>
-                      <td style={{ verticalAlign: "top" }}>
-                        <div style={{ display: "grid", gap: 8 }}>
-                          <div className="jw-row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                            {badgeForFeedback(fbLabel) || <span className="jw-muted2" style={{ fontSize: 12 }}>No feedback</span>}
-                            {fbCat ? <span className="jw-badge subtle">{fbCat}</span> : null}
-                            {fbAt ? <span className="jw-badge subtle">{fmtDate(fbAt)}</span> : null}
-                          </div>
 
-                          <details className="jw-menu">
-                            <summary className="jw-btn small">Set feedback</summary>
-                            <div className="jw-menu-panel">
-                              <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "applied")}>Applied</button>
-                              <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "include")}>Relevant</button>
-                              <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "exclude")}>Not relevant</button>
-                              <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "ignore")}>Ignore</button>
+                      <td style={{ verticalAlign: "top" }}>
+                        <DecisionBlock item={item} />
+                      </td>
+
+                      <td style={{ verticalAlign: "top" }}>
+                        {reasons.length ? (
+                          <details className="jw-audit-reasons">
+                            <summary>
+                              <Icon name="chevronRight" size={13} className="jw-audit-reason-caret" />
+                              <span>
+                                {reasons.length} reason{reasons.length > 1 ? "s" : ""}
+                              </span>
+                            </summary>
+                            <div className="jw-audit-reason-list">
+                              {reasons.map((x, i) => (
+                                <div key={i}>
+                                  <span className="jw-audit-reason-arrow">{">"}</span>
+                                  <span>{x}</span>
+                                </div>
+                              ))}
                             </div>
                           </details>
+                        ) : (
+                          <span className="jw-help">No reasons recorded.</span>
+                        )}
+                      </td>
+
+                      <td style={{ verticalAlign: "top" }}>
+                        <div className="jw-audit-actions-col">
+                          <OverrideButton row={item} onSetOverride={onSetOverride} onClearOverride={onClearOverride} />
+                          <FeedbackButtons value={item.feedback_label} onChange={(next) => onSetFeedback(item.dedupe_key, next)} />
                         </div>
                       </td>
                     </tr>
                   );
                 })}
-
-                {!loading && (!data.items || data.items.length === 0) ? (
-                  <tr>
-                    <td colSpan={8} className="jw-muted" style={{ padding: 14 }}>
-                      No rows.
-                    </td>
-                  </tr>
-                ) : null}
               </tbody>
-              </table>
+            </table>
+          </div>
+
+          <div className="jw-only-mobile jw-cardlist">
+            {data.items.map((item) => (
+              <AuditCard key={item.dedupe_key} item={item} onSetOverride={onSetOverride} onClearOverride={onClearOverride} onSetFeedback={onSetFeedback} />
+            ))}
+          </div>
+        </>
+      ) : null}
+
+      {isMobile ? (
+        <>
+          <div className={`jw-sheet-overlay ${filtersOpen ? "open" : ""}`} onClick={() => setFiltersOpen(false)} />
+          <div className={`jw-sheet ${filtersOpen ? "open" : ""}`} role="dialog" aria-modal="true" aria-label="Audit filters">
+            <div className="jw-sheet-h">
+              <div className="jw-sheet-title">Filters</div>
+              <button className="jw-btn small" type="button" onClick={() => setFiltersOpen(false)}>
+                Close
+              </button>
             </div>
-          )}
-        </div>
-      </div>
+            <div className="jw-sheet-b">{filtersContent}</div>
+          </div>
+        </>
+      ) : null}
+
+      <style>{`
+        .jw-audit-page{
+          --fs-xs: 12px;
+          --fs-sm: 13px;
+          --fs-base: 14px;
+          --fs-md: 16px;
+        }
+        .jw-audit-page .jw-table th{
+          font-size: 11px;
+        }
+        .jw-audit-hero-actions{
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        .jw-audit-filters-stack{
+          display: grid;
+          gap: 12px;
+        }
+        .jw-audit-filters-grid{
+          display: grid;
+          grid-template-columns: minmax(220px, 1.35fr) repeat(2, minmax(140px, 0.85fr));
+          gap: 12px;
+          align-items: end;
+        }
+        .jw-joblink{
+          font-weight: 600;
+          font-size: 15px;
+          text-decoration: underline;
+          text-decoration-style: dashed;
+          text-underline-offset: 4px;
+          color: var(--text);
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .jw-audit-card-head{
+          display: flex;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+          align-items: flex-start;
+        }
+        .jw-audit-card-meta{
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          align-items: center;
+        }
+        .jw-audit-actions{
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          flex-wrap: wrap;
+        }
+        .jw-audit-actions-col{
+          display: grid;
+          gap: 10px;
+          min-width: 280px;
+        }
+        .jw-audit-jobmeta{
+          margin-top: 15px;
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          color: var(--muted);
+          font-size: var(--fs-xs);
+        }
+        .jw-audit-jobmeta > span{
+          padding: 4px 8px;
+          border-radius: 999px;
+          border: 1px solid var(--border);
+          background: rgba(255,255,255,0.03);
+        }
+        .jw-audit-company{
+          display: inline-flex;
+          align-items: center;
+          padding: 4px 10px;
+          border-radius: 999px;
+          border: 1px solid rgba(var(--primary-rgb), 0.42);
+          background: rgba(var(--primary-rgb), 0.18);
+          color: #d1fae5;
+          font-size: var(--fs-xs);
+          font-weight: 600;
+          letter-spacing: 0.01em;
+        }
+        .jw-audit-decision-card{
+          display: grid;
+          gap: 10px;
+          padding: 10px;
+          border-radius: 12px;
+          border: 1px solid var(--border);
+          background: rgba(24, 33, 45, 0.56);
+        }
+        .jw-audit-decision-card.ok{
+          border-color: rgba(34, 197, 94, 0.32);
+          background: rgba(34, 197, 94, 0.08);
+        }
+        .jw-audit-decision-card.danger{
+          border-color: rgba(251, 113, 133, 0.34);
+          background: rgba(251, 113, 133, 0.08);
+        }
+        .jw-audit-decision-card.compact{
+          gap: 8px;
+          padding: 8px 10px;
+        }
+        .jw-audit-decision-head{
+          display: flex;
+          gap: 8px;
+          align-items: flex-start;
+        }
+        .jw-audit-decision-dot{
+          width: 9px;
+          height: 9px;
+          border-radius: 999px;
+          margin-top: 5px;
+          flex: 0 0 auto;
+        }
+        .jw-audit-decision-dot.ok{ background: #22c55e; }
+        .jw-audit-decision-dot.danger{ background: #fb7185; }
+        .jw-audit-decision-title{
+          font-size: 13px;
+          font-weight: 700;
+          line-height: 1.2;
+        }
+        .jw-audit-decision-sub{
+          margin-top: 3px;
+          font-size: 12px;
+          color: var(--muted2);
+        }
+        .jw-audit-decision-tags{
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+        .jw-audit-reasons summary{
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          cursor: pointer;
+          color: var(--muted);
+          font-size: 12px;
+          list-style: none;
+        }
+        .jw-audit-reason-caret{
+          transition: transform 140ms ease;
+        }
+        .jw-audit-reasons[open] .jw-audit-reason-caret{
+          transform: rotate(90deg);
+        }
+        .jw-audit-reasons summary::-webkit-details-marker{
+          display: none;
+        }
+        .jw-audit-reason-list{
+          margin-top: 8px;
+          display: grid;
+          gap: 9px;
+          font-size: 13px;
+          color: var(--text);
+          line-height: 1.5;
+        }
+        .jw-audit-reason-list > div{
+          display: flex;
+          gap: 8px;
+          align-items: flex-start;
+          padding: 6px 8px;
+          border-radius: 10px;
+          background: rgba(255,255,255,0.02);
+        }
+        .jw-audit-reason-arrow{
+          color: var(--primary);
+          font-weight: 700;
+          line-height: 1.2;
+          margin-top: 1px;
+          flex: 0 0 auto;
+        }
+        .jw-audit-feedback-group{
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+        .jw-audit-feedback-btn{
+          border: 1px solid var(--border);
+          background: rgba(24, 33, 45, 0.62);
+          color: var(--text-2);
+          border-radius: 10px;
+          padding: 7px 9px;
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: border-color 140ms ease, background 140ms ease, color 140ms ease, transform 120ms ease;
+        }
+        .jw-audit-feedback-btn:hover{
+          border-color: var(--border-strong);
+          color: var(--text);
+          transform: translateY(-1px);
+        }
+        .jw-audit-feedback-btn.active.ok{
+          border-color: rgba(34, 197, 94, 0.42);
+          background: rgba(34, 197, 94, 0.16);
+          color: #bbf7d0;
+        }
+        .jw-audit-feedback-btn.active.warn{
+          border-color: rgba(251, 191, 36, 0.42);
+          background: rgba(251, 191, 36, 0.16);
+          color: #fef3c7;
+        }
+        .jw-audit-feedback-btn.active.danger{
+          border-color: rgba(251, 113, 133, 0.42);
+          background: rgba(251, 113, 133, 0.16);
+          color: #fecdd3;
+        }
+        @media (max-width: 1120px){
+          .jw-audit-actions-col{
+            min-width: 240px;
+          }
+          .jw-audit-filters-grid{
+            grid-template-columns: 1fr 1fr;
+          }
+        }
+        @media (max-width: 767px){
+          .jw-audit-filters-grid{
+            grid-template-columns: 1fr;
+          }
+        }
+      `}</style>
     </div>
   );
 }
+
