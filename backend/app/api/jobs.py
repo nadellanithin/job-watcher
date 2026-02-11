@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Request, Query
 from typing import Optional, Dict, Any, Tuple
 
+from app.db.repo_settings import get_settings
+
 router = APIRouter()
 
 
@@ -113,8 +115,22 @@ def jobs(
     h1b_only: int = Query(0),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
+    sort: str = Query("", description="Ordering: recent or relevance"),
 ):
     con = request.app.state.db
+
+    # Decide default sorting behavior. If ML is enabled, it's useful to rank by relevance
+    # for included scopes (new/settings) without changing inclusion logic.
+    settings = get_settings(con, "default")
+    ml_enabled = bool(settings.get("ml_enabled"))
+    if not sort:
+        if ml_enabled and scope in ("new", "settings"):
+            sort = "relevance"
+        else:
+            sort = "recent"
+    sort = (sort or "recent").lower()
+    if sort not in ("recent", "relevance"):
+        sort = "recent"
 
     latest_run_id, latest_run_started_at, latest_run_finished_at = _latest_run_info(con)
 
@@ -155,15 +171,19 @@ def jobs(
             jl.source_type,
             jl.past_h1b_support,
             COALESCE(jl.work_mode, 'unknown') AS work_mode,
+            COALESCE(ms.ml_prob, NULL) AS ml_prob,
             js.first_seen,
             js.last_seen
         FROM jobs_latest jl
         JOIN jobs_seen js ON js.dedupe_key = jl.dedupe_key
+        LEFT JOIN job_ml_scores ms ON ms.dedupe_key = jl.dedupe_key
         """ + where_sql + """
-        ORDER BY js.first_seen DESC
+        ORDER BY
+          CASE WHEN :sort = 'relevance' THEN COALESCE(ms.ml_prob, -1) ELSE 0 END DESC,
+          js.first_seen DESC
         LIMIT :limit OFFSET :offset
         """,
-        {**params, "limit": page_size, "offset": offset},
+        {**params, "limit": page_size, "offset": offset, "sort": sort},
     ).fetchall()
 
     items = [dict(r) for r in rows]
@@ -207,6 +227,7 @@ def jobs(
 
     meta = {
         "scope": scope,
+        "sort": sort,
         "latest_run_id": latest_run_id,
         "latest_run_started_at": latest_run_started_at,
         "latest_run_finished_at": latest_run_finished_at,

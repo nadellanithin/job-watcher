@@ -12,6 +12,7 @@ from app.services.fetchers.legacy_adapter import fetch_jobs_via_legacy
 from app.db.repo_companies import list_companies, update_company
 from app.db.repo_settings import get_settings
 from app.core.legacy_config_builder import build_legacy_config
+from app.core.ml_relevance import MLRelevance
 
 
 def now_utc_iso() -> str:
@@ -45,6 +46,8 @@ class RunnerService:
 
         with redirect_stdout(buf), redirect_stderr(buf):
             settings = get_settings(self.con, user_id)
+
+            ml_enabled = bool(settings.get("ml_enabled"))
 
             # Stable fingerprint of settings that drove this run.
             settings_hash = hashlib.sha256(
@@ -261,6 +264,19 @@ class RunnerService:
                 ],
             )
 
+            # === Local ML: train (if enough labels) and score latest jobs ===
+            ml_info = {"enabled": ml_enabled}
+            if ml_enabled:
+                try:
+                    ml = MLRelevance(data_dir="./.data")
+                    trained, info = ml.train_from_db(self.con)
+                    ml_info["train"] = {"trained": trained, **(info or {})}
+                    # Score the full latest job pool (used for ordering / later rescue)
+                    score_info = ml.score_jobs_latest(self.con)
+                    ml_info["score"] = score_info
+                except Exception as e:
+                    ml_info["error"] = str(e)
+
             # === Persist audit rows (explainability) ===
             self.con.executemany(
                 """
@@ -313,6 +329,25 @@ class RunnerService:
             write_json("./new_jobs.json", new)
             write_csv("./new_jobs.csv", new)
 
+            # === Optional: local ML scoring (rank_only/rescue in later phase) ===
+            ml_info = None
+            if ml_enabled:
+                try:
+                    ml = MLRelevance("./.data")
+                    trained, info = ml.train_from_db(self.con)
+                    # Train may be skipped if not enough labels or already trained.
+                    # We still try to score with an existing model.
+                    score_info = ml.score_jobs_latest(self.con)
+                    ml_info = {
+                        "trained": bool(trained),
+                        "train_info": info,
+                        "score_info": score_info,
+                    }
+                    print(f"[ml] {ml_info}")
+                except Exception as e:
+                    ml_info = {"trained": False, "error": str(e)}
+                    print(f"[ml] failed err={e}")
+
         finished = now_utc_iso()
 
         logs = _truncate(buf.getvalue(), max_chars=20000)
@@ -325,6 +360,7 @@ class RunnerService:
             "h1b_errors_count": len(h1b_errors or []),
             "settings_hash": settings_hash,
             "settings_summary": settings_summary,
+            "ml": ml_info,
             "logs": logs,
         }
 

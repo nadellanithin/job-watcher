@@ -97,6 +97,39 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
         )
 
 
+    # job_feedback: explicit user labels for training (include/exclude/applied/ignore)
+    if not _has_table(con, "job_feedback"):
+        con.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS job_feedback (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              dedupe_key TEXT NOT NULL,
+              label TEXT NOT NULL CHECK(label IN ('include','exclude','applied','ignore')),
+              reason_category TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_job_feedback_dedupe_key ON job_feedback(dedupe_key);
+            CREATE INDEX IF NOT EXISTS idx_job_feedback_label ON job_feedback(label);
+            CREATE INDEX IF NOT EXISTS idx_job_feedback_created_at ON job_feedback(created_at);
+            """
+        )
+
+    # job_ml_scores: latest ML probability per job for ordering/rescue
+    if not _has_table(con, "job_ml_scores"):
+        con.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS job_ml_scores (
+              dedupe_key TEXT PRIMARY KEY,
+              ml_prob REAL NOT NULL,
+              model_id TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_job_ml_scores_model_id ON job_ml_scores(model_id);
+            CREATE INDEX IF NOT EXISTS idx_job_ml_scores_updated_at ON job_ml_scores(updated_at);
+            """
+        )
+
+
 def init_db(db_path: str, migration_sql_path: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(db_path)

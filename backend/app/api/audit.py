@@ -63,7 +63,28 @@ def get_audit(
           a.run_id, a.dedupe_key, a.included, a.settings_hash, a.created_at,
           a.company_name, a.title, a.location, a.url, a.source_type, a.work_mode, a.reasons_json,
           o.action AS override_action,
-          o.note AS override_note
+          o.note AS override_note,
+          (
+            SELECT f.label
+            FROM job_feedback f
+            WHERE f.dedupe_key = a.dedupe_key
+            ORDER BY f.created_at DESC, f.id DESC
+            LIMIT 1
+          ) AS feedback_label,
+          (
+            SELECT f.reason_category
+            FROM job_feedback f
+            WHERE f.dedupe_key = a.dedupe_key
+            ORDER BY f.created_at DESC, f.id DESC
+            LIMIT 1
+          ) AS feedback_reason_category,
+          (
+            SELECT f.created_at
+            FROM job_feedback f
+            WHERE f.dedupe_key = a.dedupe_key
+            ORDER BY f.created_at DESC, f.id DESC
+            LIMIT 1
+          ) AS feedback_created_at
         FROM run_job_audit a
         LEFT JOIN job_overrides o ON o.dedupe_key = a.dedupe_key
         """

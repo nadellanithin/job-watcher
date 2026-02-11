@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { apiDelete, apiGet, apiPut } from "../api/client.js";
+import { apiDelete, apiGet, apiPost, apiPut } from "../api/client.js";
 
 function fmtDate(s) {
   if (!s) return "";
@@ -42,6 +42,14 @@ function prettyReason(raw) {
   return clean;
 }
 
+
+function badgeForFeedback(label) {
+  if (!label) return null;
+  const l = String(label);
+  const cls = l === "applied" || l === "include" ? "ok" : l === "exclude" ? "bad" : "warn";
+  return <span className={`jw-pill ${cls}`}>{l}</span>;
+}
+
 export default function Audit() {
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -55,6 +63,18 @@ export default function Audit() {
   const [q, setQ] = useState(qParam);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+
+  // Responsive rendering: tables are great on wide screens, but on narrow
+  // screens horizontal scrolling is easy to miss. We'll switch to cards.
+  const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1100);
+  useEffect(() => {
+    const onResize = () => setIsNarrow(window.innerWidth < 1100);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const tableWrapRef = useRef(null);
+  const [tableScrollable, setTableScrollable] = useState(false);
 
   const [data, setData] = useState({ items: [], total: 0, meta: {} });
   const [loading, setLoading] = useState(false);
@@ -109,6 +129,19 @@ export default function Audit() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId, outcome, q, page, pageSize]);
 
+  useEffect(() => {
+    if (isNarrow) {
+      setTableScrollable(false);
+      return;
+    }
+    const el = tableWrapRef.current;
+    if (!el) return;
+    const t = window.setTimeout(() => {
+      setTableScrollable(el.scrollWidth > el.clientWidth + 8);
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [data, isNarrow]);
+
   const totalPages = useMemo(() => {
     const t = Number(data?.total || 0);
     return Math.max(1, Math.ceil(t / pageSize));
@@ -129,6 +162,15 @@ export default function Audit() {
       await fetchAudit();
     } catch (e) {
       alert(e?.message || "Clear override failed");
+    }
+  };
+
+  const onFeedback = async (dedupeKey, label) => {
+    try {
+      await apiPost("/api/feedback", { dedupe_key: dedupeKey, label, reason_category: "manual" });
+      await fetchAudit();
+    } catch (e) {
+      alert(e?.message || "Feedback failed");
     }
   };
 
@@ -285,8 +327,90 @@ export default function Audit() {
         <div className="jw-card-b" style={{ display: "grid", gap: 12 }}>
           {err ? <div className="jw-alert">{err}</div> : null}
 
-          <div className="jw-tablewrap" style={{ overflowX: "auto" }}>
-            <table className="jw-table" style={{ tableLayout: "fixed", minWidth: 980 }}>
+          {isNarrow ? (
+            <div className="jw-audit-cards">
+              {(data.items || []).map((r) => {
+                const included = Number(r.included) === 1;
+                const oa = (r.override_action || "").toLowerCase();
+                const reasons = normalizeReasons(r.reasons);
+                const fbLabel = (r.feedback_label || "").toLowerCase();
+                return (
+                  <div key={r.dedupe_key} className="jw-audit-card">
+                    <div className="jw-audit-card-top">
+                      <span className={`jw-badge ${included ? "ok" : "danger"}`}>{included ? "Included" : "Excluded"}</span>
+                      {oa ? <span className={`jw-badge ${oa === "include" ? "ok" : "danger"}`}>Override: {oa}</span> : null}
+                      {badgeForFeedback(fbLabel)}
+                    </div>
+
+                    <div className="jw-audit-card-title">
+                      {r.url ? (
+                        <a href={r.url} target="_blank" rel="noreferrer">
+                          {r.title} <span style={{ fontWeight: 800 }}>↗</span>
+                        </a>
+                      ) : (
+                        r.title
+                      )}
+                    </div>
+                    <div className="jw-muted2" style={{ fontSize: 12 }}>
+                      <b style={{ color: "var(--text)" }}>{r.company_name}</b> · {r.location || "-"} · {r.source_type}
+                    </div>
+
+                    {reasons.length ? (
+                      <details className="jw-audit-reasons">
+                        <summary className="jw-audit-reasons-summary">Reasons ({reasons.length})</summary>
+                        <div className="jw-audit-reasons-body">
+                          {reasons.map((reason, idx) => (
+                            <div key={`${r.dedupe_key}-rs-${idx}`} className="jw-muted2" style={{ fontSize: 12, lineHeight: 1.35 }}>
+                              • {prettyReason(reason)}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    ) : null}
+
+                    <div className="jw-audit-card-actions">
+                      <div className="jw-row" style={{ gap: 8, flexWrap: "wrap" }}>
+                        {oa ? (
+                          <button className="jw-btn small" type="button" onClick={() => onClear(r.dedupe_key)}>
+                            Clear override
+                          </button>
+                        ) : !included ? (
+                          <button className="jw-btn small" type="button" onClick={() => onForce(r.dedupe_key, "include")}>
+                            Force include
+                          </button>
+                        ) : (
+                          <button className="jw-btn small" type="button" onClick={() => onForce(r.dedupe_key, "exclude")}>
+                            Force exclude
+                          </button>
+                        )}
+
+                        <details className="jw-menu">
+                          <summary className="jw-btn small">Feedback</summary>
+                          <div className="jw-menu-panel">
+                            <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "applied")}>Applied</button>
+                            <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "include")}>Relevant</button>
+                            <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "exclude")}>Not relevant</button>
+                            <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "ignore")}>Ignore</button>
+                          </div>
+                        </details>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {!loading && (!data.items || data.items.length === 0) ? (
+                <div className="jw-muted" style={{ padding: 14 }}>No rows.</div>
+              ) : null}
+            </div>
+          ) : (
+            <div
+              ref={tableWrapRef}
+              className="jw-tablewrap"
+              data-scroll={tableScrollable ? "1" : "0"}
+              style={{ overflowX: "auto" }}
+            >
+              <table className="jw-table" style={{ tableLayout: "fixed", minWidth: 980 }}>
               <thead>
                 <tr>
                   <th style={{ width: 110 }}>Outcome</th>
@@ -296,6 +420,7 @@ export default function Audit() {
                   <th style={{ width: 150 }}>Source</th>
                   <th style={{ width: 240 }}>Reasons</th>
                   <th style={{ width: 180 }}>Override</th>
+                  <th style={{ width: 220 }}>Feedback</th>
                 </tr>
               </thead>
               <tbody>
@@ -306,6 +431,10 @@ export default function Audit() {
                   const shownReasons = reasons.slice(0, 3);
                   const extraReasons = Math.max(0, reasons.length - shownReasons.length);
                   const overrideClass = oa === "include" ? "ok" : oa === "exclude" ? "danger" : "subtle";
+
+                  const fbLabel = (r.feedback_label || "").toLowerCase();
+                  const fbCat = (r.feedback_reason_category || "").toLowerCase();
+                  const fbAt = r.feedback_created_at || "";
 
                   return (
                     <tr key={r.dedupe_key}>
@@ -402,20 +531,40 @@ export default function Audit() {
                           )}
                         </div>
                       </td>
+                      <td style={{ verticalAlign: "top" }}>
+                        <div style={{ display: "grid", gap: 8 }}>
+                          <div className="jw-row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                            {badgeForFeedback(fbLabel) || <span className="jw-muted2" style={{ fontSize: 12 }}>No feedback</span>}
+                            {fbCat ? <span className="jw-badge subtle">{fbCat}</span> : null}
+                            {fbAt ? <span className="jw-badge subtle">{fmtDate(fbAt)}</span> : null}
+                          </div>
+
+                          <details className="jw-menu">
+                            <summary className="jw-btn small">Set feedback</summary>
+                            <div className="jw-menu-panel">
+                              <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "applied")}>Applied</button>
+                              <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "include")}>Relevant</button>
+                              <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "exclude")}>Not relevant</button>
+                              <button className="jw-menu-item" type="button" onClick={() => onFeedback(r.dedupe_key, "ignore")}>Ignore</button>
+                            </div>
+                          </details>
+                        </div>
+                      </td>
                     </tr>
                   );
                 })}
 
                 {!loading && (!data.items || data.items.length === 0) ? (
                   <tr>
-                    <td colSpan={7} className="jw-muted" style={{ padding: 14 }}>
+                    <td colSpan={8} className="jw-muted" style={{ padding: 14 }}>
                       No rows.
                     </td>
                   </tr>
                 ) : null}
               </tbody>
-            </table>
-          </div>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </div>

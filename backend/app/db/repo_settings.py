@@ -22,6 +22,13 @@ DEFAULT_SETTINGS = {
     # H1B
     "uscis_h1b_years": [],
     "uscis_h1b_cache_dir": "./.cache/uscis_h1b",
+
+    # Local ML relevance (free, CPU)
+    # rank_only: only affects ordering (safe)
+    # rescue: can include borderline/no-signal jobs (guarded; implemented later)
+    "ml_enabled": False,
+    "ml_mode": "rank_only",  # rank_only|rescue
+    "ml_rescue_threshold": 0.85,
 }
 
 def get_settings(con, user_id: str) -> Dict[str, Any]:

@@ -180,14 +180,47 @@ export default function Settings() {
   const [preferredStates, setPreferredStates] = useState([]);
   const [workMode, setWorkMode] = useState("any");
 
+  // Local ML relevance
+  const [mlEnabled, setMlEnabled] = useState(false);
+  const [mlMode, setMlMode] = useState("rank_only");
+  const [mlRescueThreshold, setMlRescueThreshold] = useState(0.85);
+
   const [h1bYears, setH1bYears] = useState([]);
   const [h1bCacheDir, setH1bCacheDir] = useState("./.cache/uscis_h1b");
 
+
+  const [feedbackStats, setFeedbackStats] = useState(null);
+  const [feedbackStatsErr, setFeedbackStatsErr] = useState("");
+  const [mlGuardMsg, setMlGuardMsg] = useState("");
+
+  // Minimum label counts before enabling ML (UI guard)
+  const ML_MIN_POS = 5;
+  const ML_MIN_NEG = 5;
+  const ML_MIN_TOTAL = 20;
+
+  const posCount = (Number(feedbackStats?.counts?.include || 0) + Number(feedbackStats?.counts?.applied || 0));
+  const negCount = (Number(feedbackStats?.counts?.exclude || 0) + Number(feedbackStats?.counts?.ignore || 0));
+  const totalCount = Number(feedbackStats?.total || 0);
+  const mlReady = posCount >= ML_MIN_POS && negCount >= ML_MIN_NEG && totalCount >= ML_MIN_TOTAL;
+  const mlReadyHint = mlReady
+    ? "Ready"
+    : `Need at least ${ML_MIN_TOTAL} total labels with ${ML_MIN_POS}+ positive (include/applied) and ${ML_MIN_NEG}+ negative (exclude/ignore). Current: ${posCount} pos, ${negCount} neg, ${totalCount} total.`;
   const load = async () => {
     setLoading(true);
     setErr("");
     try {
       const s = await apiGet("/api/settings");
+
+      // Feedback stats (non-blocking for settings UI)
+      try {
+        // Prefer a "jobs" view so we can show human-readable job context.
+        const fs = await apiGet("/api/feedback/stats?limit=15&view=jobs");
+        setFeedbackStats(fs);
+        setFeedbackStatsErr("");
+      } catch (e2) {
+        setFeedbackStats(null);
+        setFeedbackStatsErr(String(e2));
+      }
 
       setRoleKeywords(s.role_keywords || []);
       setIncludeKeywords(s.include_keywords || []);
@@ -202,6 +235,12 @@ export default function Settings() {
       setAllowRemoteUs(Boolean(s.allow_remote_us));
       setPreferredStates(s.preferred_states || []);
       setWorkMode(s.work_mode || "any");
+
+      setMlEnabled(Boolean(s.ml_enabled));
+      setMlMode(s.ml_mode || "rank_only");
+      setMlRescueThreshold(
+        typeof s.ml_rescue_threshold === "number" ? s.ml_rescue_threshold : 0.85
+      );
 
       setH1bYears((s.uscis_h1b_years || []).map(String));
       setH1bCacheDir(s.uscis_h1b_cache_dir || "./.cache/uscis_h1b");
@@ -231,6 +270,10 @@ export default function Settings() {
       preferred_states: preferredStates,
       work_mode: workMode,
 
+      ml_enabled: mlEnabled,
+      ml_mode: mlMode,
+      ml_rescue_threshold: Number(mlRescueThreshold) || 0.85,
+
       uscis_h1b_years: (h1bYears || [])
         .map((x) => Number(x))
         .filter((n) => Number.isFinite(n)),
@@ -248,6 +291,9 @@ export default function Settings() {
     allowRemoteUs,
     preferredStates,
     workMode,
+    mlEnabled,
+    mlMode,
+    mlRescueThreshold,
     h1bYears,
     h1bCacheDir,
   ]);
@@ -294,10 +340,219 @@ export default function Settings() {
         </div>
       ) : (
         <div style={{ display: "grid", gap: 12 }}>
-          <Section
-            title="Keyword targeting"
-            subtitle="Fast scan/edit using chips. Paste comma/newline lists to bulk add."
-          >
+
+          {/*
+            Keep Settings readable: group the "learning" pieces on the left,
+            and the most-touched keyword/score knobs on the right.
+          */}
+          <div className="jw-settings-grid">
+            <div style={{ display: "grid", gap: 12 }}>
+              <Section
+                title="Learning signals"
+                subtitle="These labels power ML re-ranking. Aim for 50–100 distinct labeled jobs before enabling ML."
+                right={
+                  <button
+                    className="jw-btn small"
+                    type="button"
+                    onClick={load}
+                    disabled={saving || loading}
+                    title="Refresh feedback stats"
+                  >
+                    Refresh
+                  </button>
+                }
+              >
+            {feedbackStatsErr ? (
+              <div className="jw-muted2" style={{ fontSize: 12 }}>
+                Could not load feedback stats: {feedbackStatsErr}
+              </div>
+            ) : null}
+
+            {!feedbackStats ? (
+              <div className="jw-muted2" style={{ fontSize: 12 }}>
+                No feedback collected yet.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                  <div className="jw-muted2" style={{ fontSize: 12 }}>
+                    Total events: <b>{feedbackStats.total}</b>
+                  </div>
+                  <div className="jw-muted2" style={{ fontSize: 12 }}>
+                    Distinct jobs: <b>{feedbackStats.distinct_jobs}</b>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {["include", "exclude", "applied", "ignore"].map((k) => (
+                    <span
+                      key={k}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        background: "rgba(255,255,255,0.08)",
+                        border: "1px solid var(--border)",
+                        fontWeight: 800,
+                        color: "var(--text)",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {k}: {Number(feedbackStats.counts?.[k] || 0)}
+                    </span>
+                  ))}
+                </div>
+
+                <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+                  <div className="jw-label" style={{ marginBottom: 8 }}>
+                    <span>Recent feedback</span>
+                    <span className="jw-help">latest jobs</span>
+                  </div>
+
+                  <div className="jw-muted2" style={{ fontSize: 12, marginBottom: 10 }}>
+                    You may see multiple feedback events for the same job — that’s expected if you click different labels.
+                    The model uses the <b>latest label per job</b>.
+                  </div>
+
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="jw-table" style={{ minWidth: 760 }}>
+                      <thead>
+                        <tr>
+                          <th style={{ width: 120 }}>When</th>
+                          <th style={{ width: 120 }}>Label</th>
+                          <th style={{ width: 110 }}>Category</th>
+                          <th>Job</th>
+                          <th style={{ width: 90, textAlign: "right" }}>Events</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(feedbackStats.recent || []).map((r) => {
+                          const when = String(r.created_at || "").replace("T", " ").replace("+00:00", "Z");
+                          const jobTitle = r.job_title || "(job not found)";
+                          const jobCompany = r.job_company || "";
+                          const jobUrl = r.job_url || "";
+
+                          return (
+                            <tr key={r.id}>
+                              <td className="jw-muted2" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{when}</td>
+                              <td style={{ fontWeight: 900 }}>{r.label}</td>
+                              <td className="jw-muted2" style={{ fontSize: 12 }}>{r.reason_category || "-"}</td>
+                              <td>
+                                <div style={{ display: "grid", gap: 2 }}>
+                                  {jobUrl ? (
+                                    <a href={jobUrl} target="_blank" rel="noreferrer" style={{ fontWeight: 800 }}>
+                                      {jobTitle} <span style={{ fontWeight: 800 }}>↗</span>
+                                    </a>
+                                  ) : (
+                                    <span style={{ fontWeight: 800 }}>{jobTitle}</span>
+                                  )}
+                                  {jobCompany ? (
+                                    <span className="jw-muted2" style={{ fontSize: 12 }}>{jobCompany}</span>
+                                  ) : null}
+                                </div>
+                              </td>
+                              <td className="jw-muted2" style={{ fontSize: 12, textAlign: "right" }}>{Number(r.events_count || 1)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+              </Section>
+
+              <Section
+                title="Local ML relevance"
+                subtitle="Free CPU model that learns from your feedback. Start with rank_only (safe)."
+              >
+            <div style={{ display: "grid", gap: 12 }}>
+              {mlGuardMsg ? (
+                <div className="jw-alert" style={{ marginBottom: 4 }}>
+                  <b>ML not enabled</b>
+                  <div style={{ marginTop: 6 }} className="jw-muted">{mlGuardMsg}</div>
+                </div>
+              ) : null}
+
+              <label style={{ display: "inline-flex", gap: 10, alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={mlEnabled}
+                  disabled={!mlReady && !mlEnabled}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    if (next && !mlReady) {
+                      setMlGuardMsg(mlReadyHint);
+                      return;
+                    }
+                    setMlGuardMsg("");
+                    setMlEnabled(next);
+                  }}
+                />
+                <span style={{ fontWeight: 800 }}>
+                  Enable ML re-ranking
+                  {!mlReady && !mlEnabled ? (
+                    <span className="jw-muted2" style={{ fontSize: 12, marginLeft: 10 }}>
+                      (locked — {mlReadyHint})
+                    </span>
+                  ) : null}
+                </span>
+              </label>
+
+              <div className="jw-row">
+                <div className="jw-col">
+                  <div className="jw-label">
+                    <span>Mode</span>
+                    <span className="jw-help">start with rank_only</span>
+                  </div>
+                  <select
+                    className="jw-select"
+                    value={mlMode}
+                    onChange={(e) => setMlMode(e.target.value)}
+                    disabled={!mlEnabled}
+                  >
+                    <option value="rank_only">Rank only (no inclusion changes)</option>
+                    <option value="rescue" disabled>
+                      Rescue (coming soon)
+                    </option>
+                  </select>
+                  <div className="jw-muted2" style={{ fontSize: 12, marginTop: 6 }}>
+                    When enabled, New/Settings job lists default to "Relevance" ordering using the latest model.
+                  </div>
+                </div>
+
+                <div className="jw-col">
+                  <div className="jw-label">
+                    <span>Rescue threshold</span>
+                    <span className="jw-help">used in rescue mode</span>
+                  </div>
+                  <input
+                    className="jw-input"
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={mlRescueThreshold}
+                    onChange={(e) => setMlRescueThreshold(e.target.value)}
+                    disabled
+                  />
+                  <div className="jw-muted2" style={{ fontSize: 12, marginTop: 6 }}>
+                    Disabled for now (we'll wire this when we implement rescue with guardrails).
+                  </div>
+                </div>
+              </div>
+            </div>
+              </Section>
+            </div>
+
+            <div style={{ display: "grid", gap: 12 }}>
+              <Section
+                title="Keyword targeting"
+                subtitle="Fast scan/edit using chips. Paste comma/newline lists to bulk add."
+              >
             <div style={{ display: "grid", gap: 14 }}>
               <div className="jw-row">
                 <div className="jw-col">
@@ -323,13 +578,15 @@ export default function Settings() {
                     className="jw-input"
                     type="number"
                     min="0"
+                    max="10"
                     step="1"
                     value={minScoreToInclude}
                     onChange={(e) => setMinScoreToInclude(e.target.value)}
                     disabled={filterMode !== "score"}
                   />
                   <div className="jw-muted2" style={{ fontSize: 12, marginTop: 6 }}>
-                    Higher = stricter. Start at 3.
+                    Score range: roughly <b>0–10+</b> depending on matches. Higher is stricter.
+                    Typical: <b>2–4</b>. Start at <b>3</b> and adjust after a run.
                   </div>
                 </div>
               </div>
@@ -381,7 +638,9 @@ export default function Settings() {
                 placeholder="no visa sponsorship, US citizens only…"
               />
             </div>
-          </Section>
+              </Section>
+            </div>
+          </div>
 
           <Section
             title="Location & work mode"
