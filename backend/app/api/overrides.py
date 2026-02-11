@@ -88,6 +88,17 @@ def upsert_override(
     )
     con.commit()
 
+    # Auto-record feedback whenever an override is set (training labels)
+    try:
+        con.execute(
+            "INSERT INTO job_feedback(dedupe_key, label, reason_category, created_at) VALUES(?,?,?,?)",
+            (dedupe_key, action, "override", now),
+        )
+        con.commit()
+    except Exception:
+        # Don't let feedback logging break overrides on older DBs.
+        pass
+
     return {"dedupe_key": dedupe_key, "action": action, "note": note}
 
 
@@ -96,4 +107,13 @@ def delete_override(request: Request, dedupe_key: str) -> Dict[str, Any]:
     con = request.app.state.db
     con.execute("DELETE FROM job_overrides WHERE dedupe_key=?", (dedupe_key,))
     con.commit()
+
+    # If this override was creating auto-feedback rows, clear those as well.
+    # We keep manual feedback (reason_category="manual") as it reflects user intent.
+    try:
+        con.execute("DELETE FROM job_feedback WHERE dedupe_key=? AND reason_category=?", (dedupe_key, "override"))
+        con.commit()
+    except Exception:
+        pass
+
     return {"ok": True, "dedupe_key": dedupe_key}

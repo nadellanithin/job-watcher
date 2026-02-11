@@ -1564,7 +1564,19 @@ class FilterAgent:
     # Matching helpers
     # -------------------------
     def _norm(self, s: str) -> str:
-        return (s or "").strip().lower()
+        """Normalize text for deterministic matching.
+
+        Important: career pages can contain zero-width characters or soft hyphens that would
+        accidentally create word boundaries (e.g., 'intern\u200bet' -> matches 'intern').
+        We strip those so word-boundary matching behaves as expected.
+        """
+        s = (s or "")
+        # Remove zero-width chars / soft hyphen / BOM that can split tokens.
+        s = s.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
+        s = s.replace("\ufeff", "").replace("\u00ad", "")
+        # Normalize whitespace.
+        s = re.sub(r"\s+", " ", s)
+        return s.strip().lower()
 
     def _is_single_token(self, s: str) -> bool:
         return bool(re.fullmatch(r"[a-z0-9][a-z0-9-]*", self._norm(s)))
@@ -1586,8 +1598,18 @@ class FilterAgent:
             out.add(t + "ships")
         return sorted(out, key=len, reverse=True)
 
-    def _match_one(self, text: str, needle: str) -> Optional[Tuple[str, str]]:
-        """Return (match_type, matched_text) for the first match, else None."""
+    def _snippet(self, t: str, start: int, end: int, window: int = 40) -> str:
+        s = max(0, start - window)
+        e = min(len(t), end + window)
+        snip = t[s:e].strip()
+        # keep it single-line and bounded
+        snip = re.sub(r"\s+", " ", snip)
+        if len(snip) > 120:
+            snip = snip[:117] + "..."
+        return snip
+
+    def _match_one_detail(self, text: str, needle: str) -> Optional[Tuple[str, str, int, int, str]]:
+        """Return (match_type, matched_text, start, end, snippet) for the first match, else None."""
         t = self._norm(text)
         n = self._norm(needle)
         if not t or not n:
@@ -1595,17 +1617,42 @@ class FilterAgent:
 
         # Phrases: normalized substring.
         if not self._is_single_token(n) or " " in n:
-            if n in t:
-                return ("phrase", needle)
+            idx = t.find(n)
+            if idx >= 0:
+                start, end = idx, idx + len(n)
+                return ("phrase", needle, start, end, self._snippet(t, start, end))
             return None
 
         # Single token: word boundary match with variants.
         variants = self._word_variants(n)
         for v in variants:
-            # hyphens are treated as word-ish chars; boundary with  is OK for most cases.
             pat = re.compile(rf"\b{re.escape(v)}\b", re.IGNORECASE)
-            if pat.search(t):
-                return ("word", v)
+            m = pat.search(t)
+            if m:
+                start, end = m.start(), m.end()
+                return ("word", m.group(0), start, end, self._snippet(t, start, end))
+        return None
+
+    def _match_one(self, text: str, needle: str) -> Optional[Tuple[str, str]]:
+        """Return (match_type, matched_text) for the first match, else None."""
+        hit = self._match_one_detail(text, needle)
+        if not hit:
+            return None
+        match_type, matched, _s, _e, _snip = hit
+        return (match_type, matched)
+
+    def _first_match_in_fields_detail(
+        self,
+        fields: List[Tuple[str, str]],
+        needles: List[str],
+    ) -> Optional[Tuple[str, str, str, str]]:
+        """Return (field, match_type, matched, snippet) for the first match across ordered fields."""
+        for field_name, field_text in fields:
+            for n in needles or []:
+                hit = self._match_one_detail(field_text, n)
+                if hit:
+                    match_type, matched, _s, _e, snip = hit
+                    return (field_name, match_type, matched, snip)
         return None
 
     def _first_match_in_fields(
@@ -1675,10 +1722,13 @@ class FilterAgent:
 
         # Visa restriction phrases are always hard fail (independent of mode)
         if self.visa_restriction_phrases:
-            hit = self._first_match_in_fields(fields_all, self.visa_restriction_phrases)
+            hit = self._first_match_in_fields_detail(fields_all, self.visa_restriction_phrases)
             if hit:
-                field, match_type, matched = hit
-                return False, [f"visa_restriction:matched:{field}:{match_type}:{matched}"]
+                field, match_type, matched, snip = hit
+                return False, [
+                    f"visa_restriction:matched:{field}:{match_type}:{matched}",
+                    f"visa_restriction:snippet:{field}:{snip}",
+                ]
 
         # Exception phrases are checked against the combined text (cheap + deterministic)
         combined = "\n".join([job.title, getattr(job, "department", "") or "", getattr(job, "team", "") or "", job.location, job.description])
@@ -1689,14 +1739,17 @@ class FilterAgent:
         if self.filter_mode == "smart":
             # User excludes are hard fail (unless exception phrase exists)
             if self.user_exclude_keywords:
-                hit = self._first_match_in_fields(fields_all, self.user_exclude_keywords)
+                hit = self._first_match_in_fields_detail(fields_all, self.user_exclude_keywords)
                 if hit:
                     ex = self._has_exception(combined)
                     if ex:
                         reasons.append(f"exclude:hit_but_exception:{hit[2]}:{ex}")
                     else:
-                        field, match_type, matched = hit
-                        return False, [f"exclude:matched:{field}:{match_type}:{matched}"]
+                        field, match_type, matched, snip = hit
+                        return False, [
+                            f"exclude:matched:{field}:{match_type}:{matched}",
+                            f"exclude:snippet:{field}:{snip}",
+                        ]
 
             # Role keywords gate (if provided)
             if self.role_keywords:
@@ -1749,15 +1802,16 @@ class FilterAgent:
 
         # User excludes become negative score by default (unless exception phrase exists)
         if self.user_exclude_keywords:
-            hit = self._first_match_in_fields(fields_all, self.user_exclude_keywords)
+            hit = self._first_match_in_fields_detail(fields_all, self.user_exclude_keywords)
             if hit:
                 ex = self._has_exception(combined)
                 if ex:
                     contrib.append(f"exclude:hit_but_exception:{hit[2]}:{ex}")
                 else:
-                    field, match_type, matched = hit
+                    field, match_type, matched, snip = hit
                     score -= 4
                     contrib.append(f"score:-4:exclude:{field}:{match_type}:{matched}")
+                    contrib.append(f"exclude:snippet:{field}:{snip}")
 
         # If we have *no* relevance evidence at all, drop it. This prevents flooding when both keyword lists are empty-ish.
         if self.role_keywords and not role_hit and not include_hit:

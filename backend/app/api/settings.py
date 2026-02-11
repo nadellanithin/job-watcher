@@ -28,6 +28,11 @@ class SettingsModel(BaseModel):
     uscis_h1b_years: Optional[List[int]] = None
     uscis_h1b_cache_dir: Optional[str] = None
 
+    # Local ML relevance
+    ml_enabled: Optional[bool] = None
+    ml_mode: Optional[Literal["rank_only", "rescue"]] = None
+    ml_rescue_threshold: Optional[float] = None
+
 
 def _short_list(lst: List[str], n: int = 2) -> str:
     if not lst:
