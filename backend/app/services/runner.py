@@ -130,11 +130,24 @@ class RunnerService:
             # === Apply deterministic per-job overrides (include/exclude) ===
             # We apply overrides on the evaluated set (audit_rows) and derive the final kept list from that.
             # This avoids any risk of breaking the legacy crawler/fetcher behavior.
+            #
+            # Preserve H1B signal computed by legacy for the kept list. audit_rows are built
+            # before H1B marking, so seed by dedupe_key to avoid defaulting everything to "no".
+            h1b_by_dedupe_key = {}
+            for row in fetched_jobs:
+                dk = build_dedupe_key(row)
+                h1b = str(row.get("past_h1b_support") or "").strip().lower()
+                h1b_by_dedupe_key[dk] = h1b if h1b in ("yes", "no") else "no"
+
             audit_by_key = {}
             dedupe_keys = []
             for row in audit_rows:
                 dk = build_dedupe_key(row)
                 row["dedupe_key"] = dk
+                row["past_h1b_support"] = h1b_by_dedupe_key.get(
+                    dk,
+                    str(row.get("past_h1b_support") or "no").strip().lower(),
+                )
                 audit_by_key[dk] = row
                 dedupe_keys.append(dk)
 

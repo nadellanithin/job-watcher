@@ -24,8 +24,16 @@ function toQuery(params) {
   return usp.toString();
 }
 
+function h1bSignal(job) {
+  return String(job?.past_h1b_support ?? job?.h1b_signal ?? "").toLowerCase();
+}
+
+function sourceLabel(job) {
+  return job?.source_type || job?.source || "-";
+}
+
 function JobCard({ job }) {
-  const h1b = String(job.h1b_signal || "").toLowerCase();
+  const h1b = h1bSignal(job);
   const h1bBadge =
     h1b === "yes"
       ? { cls: "ok", label: "H-1B signal" }
@@ -47,7 +55,7 @@ function JobCard({ job }) {
           </div>
 
           <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {job.source ? <span className="jw-badge subtle">{job.source}</span> : null}
+            {sourceLabel(job) !== "-" ? <span className="jw-badge subtle">{sourceLabel(job)}</span> : null}
             {job.work_mode ? <span className="jw-badge subtle">{job.work_mode}</span> : null}
             <span className={`jw-badge ${h1bBadge.cls}`}>{h1bBadge.label}</span>
           </div>
@@ -293,12 +301,12 @@ export default function JobsTable({ scope, runId, settingsHash, onMetaChange }) 
                         {job.department ? <div style={{ color: "var(--muted2)", fontSize: 12, marginTop: 4 }}>{job.department}</div> : null}
                       </td>
                       <td style={{ color: "var(--muted)" }}>{job.location || "-"}</td>
-                      <td style={{ color: "var(--muted)" }}>{job.source || "-"}</td>
+                      <td style={{ color: "var(--muted)" }}>{sourceLabel(job)}</td>
                       <td style={{ color: "var(--muted)" }}>{job.work_mode || "-"}</td>
                       <td>
-                        {String(job.h1b_signal || "").toLowerCase() === "yes" ? (
+                        {h1bSignal(job) === "yes" ? (
                           <span className="jw-badge ok">Yes</span>
-                        ) : String(job.h1b_signal || "").toLowerCase() === "no" ? (
+                        ) : h1bSignal(job) === "no" ? (
                           <span className="jw-badge danger">No</span>
                         ) : (
                           <span className="jw-badge subtle">-</span>
