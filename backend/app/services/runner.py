@@ -11,8 +11,10 @@ from app.services.fetchers.legacy_adapter import fetch_jobs_via_legacy
 
 from app.db.repo_companies import list_companies, update_company
 from app.db.repo_settings import get_settings
+from app.core.config import get_runtime_config
 from app.core.legacy_config_builder import build_legacy_config
 from app.core.ml_relevance import MLRelevance
+from app.services.inbox_retention import apply_space_management
 
 
 def now_utc_iso() -> str:
@@ -34,9 +36,34 @@ class RunnerService:
     def __init__(self, con):
         self.con = con
 
+    def _retention_cleanup(self, *, max_runs: int) -> None:
+        """Bound run-history growth (idempotent, safe)."""
+        if max_runs <= 0:
+            return
+
+        old = self.con.execute(
+            "SELECT run_id FROM runs ORDER BY started_at DESC LIMIT -1 OFFSET ?",
+            (max_runs,),
+        ).fetchall()
+        old_ids = [r["run_id"] for r in (old or []) if r and r["run_id"]]
+        if not old_ids:
+            return
+
+        chunk = 500
+        for i in range(0, len(old_ids), chunk):
+            ids = old_ids[i : i + chunk]
+            q = ",".join(["?"] * len(ids))
+            self.con.execute(f"DELETE FROM run_job_audit WHERE run_id IN ({q})", ids)
+            self.con.execute(f"DELETE FROM run_jobs WHERE run_id IN ({q})", ids)
+            self.con.execute(f"DELETE FROM run_settings WHERE run_id IN ({q})", ids)
+            self.con.execute(f"DELETE FROM runs WHERE run_id IN ({q})", ids)
+
+        return
+
     def run_once(self) -> dict:
         started = now_utc_iso()
         user_id = "default"
+        runtime_cfg = get_runtime_config()
 
         # Create run_id early so downstream can write membership rows
         run_id = str(uuid.uuid4())
@@ -414,6 +441,63 @@ class RunnerService:
                     for r in audit_rows
                 ],
             )
+            # === Upsert into jobs_catalog (deduped Inbox queue) ===
+            try:
+                def _short_reasons(rs, n=8):
+                    if not isinstance(rs, list):
+                        return []
+                    return rs[:n]
+
+                self.con.executemany(
+                    """
+                    INSERT INTO jobs_catalog(
+                      dedupe_key, company_name, title, location, url, source_type, work_mode,
+                      first_seen, last_seen, last_run_id, seen_count, last_outcome, last_reasons_json, review_status, is_active
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(dedupe_key) DO UPDATE SET
+                      company_name=excluded.company_name,
+                      title=excluded.title,
+                      location=excluded.location,
+                      url=excluded.url,
+                      source_type=excluded.source_type,
+                      work_mode=excluded.work_mode,
+                      last_seen=excluded.last_seen,
+                      last_run_id=excluded.last_run_id,
+                      seen_count=jobs_catalog.seen_count + 1,
+                      last_outcome=excluded.last_outcome,
+                      last_reasons_json=excluded.last_reasons_json,
+                      is_active=1
+                    """,
+                    [
+                        (
+                            r["dedupe_key"],
+                            r.get("company_name", ""),
+                            r.get("title", ""),
+                            r.get("location", ""),
+                            r.get("url", ""),
+                            r.get("source_type", ""),
+                            r.get("work_mode", "unknown"),
+                            now,  # first_seen on insert
+                            now,
+                            run_id,
+                            1,
+                            ("included" if int(r.get("_audit_included") or 0) == 1 else "excluded"),
+                            json.dumps(_short_reasons(r.get("_audit_reasons") or [])),
+                            "unreviewed",
+                            1,
+                        )
+                        for r in audit_rows
+                    ],
+                )
+            except Exception as e:
+                print(f"[jobs_catalog] upsert failed err={e}")
+
+            inbox_space = apply_space_management(
+                self.con,
+                ttl_days=runtime_cfg.inbox_active_ttl_days,
+                max_active_rows=runtime_cfg.inbox_max_active_rows,
+            )
+
 
             # === Update job_ml_scores for ordering in Jobs screens ===
             if ml_enabled:
@@ -452,6 +536,7 @@ class RunnerService:
             "h1b_errors_count": len(h1b_errors or []),
             "settings_hash": settings_hash,
             "settings_summary": settings_summary,
+            "inbox_space": inbox_space,
             "ml": ml_info,
             "logs": logs,
         }
@@ -477,6 +562,9 @@ class RunnerService:
             )
         except Exception:
             pass
+
+        # retention cleanup (run history only)
+        self._retention_cleanup(max_runs=runtime_cfg.retention_max_runs)
 
         self.con.commit()
 

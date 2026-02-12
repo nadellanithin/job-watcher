@@ -21,8 +21,14 @@ function normalizeReasons(v) {
       .replace(/_/g, " ")
       .trim();
 
-  const humanize = (text) => {
-    const parts = String(text || "")
+  const humanize = (raw) => {
+    const cleaned = String(raw ?? "")
+      .replace(/[\r\n]+/g, " ")
+      .replace(/^\*+\s*/, "")
+      .trim();
+    if (!cleaned) return "";
+
+    const parts = cleaned
       .split(":")
       .map((p) => p.trim())
       .filter(Boolean);
@@ -39,33 +45,20 @@ function normalizeReasons(v) {
       }
 
       const delta = parts[1] || "";
-      const decision = parts[2] || "";
-      const detailParts = parts.slice(3);
-      const details = [];
-      for (let i = 0; i < detailParts.length; ) {
-        const key = detailParts[i];
-        const next = detailParts[i + 1];
-        const after = detailParts[i + 2];
+      const family = prettify(parts[2] || "");
+      const field = prettify(parts[3] || "");
+      const matchType = prettify(parts[4] || "");
+      const matched = prettify(parts.slice(5).join(":"));
 
-        if (key === "description" && next === "word" && after) {
-          details.push(`Description contains "${prettify(after)}"`);
-          i += 3;
-          continue;
-        }
-
-        if (key && next !== undefined) {
-          details.push(`${prettify(key)}: ${prettify(next)}`);
-          i += 2;
-          continue;
-        }
-
-        if (key) details.push(prettify(key));
-        i += 1;
-      }
-
-      const head = `Score ${delta}${decision ? ` ${decision}` : ""}`.trim();
-      return details.length ? `${head} - ${details.join(", ")}` : head;
+      if (family && field && matched) return `Score ${delta} from ${family} match in ${field}: "${matched}"`;
+      if (family && field && matchType) return `Score ${delta} from ${family} match in ${field} (${matchType})`;
+      if (family && field) return `Score ${delta} from ${family} match in ${field}`;
+      if (family) return `Score ${delta} from ${family} match`;
+      return `Score ${delta}`.trim();
     }
+
+    if (parts[0] === "override" && parts[1] === "force_include") return "Manual override: forced include";
+    if (parts[0] === "override" && parts[1] === "force_exclude") return "Manual override: forced exclude";
 
     if (parts.length > 1) {
       return `${prettify(parts[0])}: ${parts
@@ -76,15 +69,7 @@ function normalizeReasons(v) {
     return prettify(parts[0]);
   };
 
-  return v
-    .map((x) =>
-      String(x ?? "")
-        .replace(/[\r\n]+/g, " ")
-        .replace(/^\*+\s*/, "")
-        .trim()
-    )
-    .map((x) => humanize(x))
-    .filter(Boolean);
+  return v.map((x) => humanize(x)).filter(Boolean);
 }
 
 function normalizeFeedbackLabel(label) {

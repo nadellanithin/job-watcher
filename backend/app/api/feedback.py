@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from app.core.config import get_runtime_config
+
 router = APIRouter()
 
 
@@ -34,6 +36,33 @@ def create_feedback(request: Request, payload: Dict[str, Any]) -> Dict[str, Any]
         "INSERT INTO job_feedback(dedupe_key, label, reason_category, created_at) VALUES(?,?,?,?)",
         (dedupe_key, label, reason_category, created_at),
     )
+
+    # Keep Inbox status in sync (best-effort).
+    try:
+        status = label
+        if status == "applied":
+            status = "include"
+        if status in ("include", "exclude", "ignore"):
+            # Ensure a catalog row exists even if the job was never seen in a run on this DB.
+            con.execute(
+                """
+                INSERT INTO jobs_catalog(
+                  dedupe_key, company_name, title, location, url, source_type, work_mode,
+                  first_seen, last_seen, last_run_id, seen_count, last_outcome, last_reasons_json, review_status
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(dedupe_key) DO UPDATE SET
+                  review_status=excluded.review_status
+                """,
+                (
+                    dedupe_key,
+                    "", "", "", "", "", "unknown",
+                    created_at, created_at, "", 0, "", "[]",
+                    status,
+                ),
+            )
+    except Exception:
+        pass
+
     con.commit()
 
     return {
@@ -143,6 +172,13 @@ def feedback_stats(
 
 @router.delete("/feedback/{dedupe_key}")
 def delete_feedback(request: Request, dedupe_key: str) -> Dict[str, Any]:
+    cfg = get_runtime_config()
+    if cfg.keep_all_feedback:
+        raise HTTPException(
+            status_code=409,
+            detail="KEEP_ALL_FEEDBACK is enabled. Export/archive feedback before deleting labels.",
+        )
+
     con = request.app.state.db
     con.execute("DELETE FROM job_feedback WHERE dedupe_key = ?", (dedupe_key,))
     con.commit()

@@ -218,13 +218,18 @@ export default function JobsTable({ scope, runId, settingsHash, onMetaChange }) 
         </label>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-        <button className="jw-btn ghost" type="button" onClick={clearFilters}>
-          Clear filters
-        </button>
-        <button className="jw-btn primary" type="button" onClick={() => setFiltersOpen(false)}>
-          Apply
-        </button>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <span className="jw-help">Filters apply instantly.</span>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button className="jw-btn ghost" type="button" onClick={clearFilters}>
+            Clear filters
+          </button>
+          {isCompact ? (
+            <button className="jw-btn" type="button" onClick={() => setFiltersOpen(false)}>
+              Done
+            </button>
+          ) : null}
+        </div>
       </div>
     </>
   );

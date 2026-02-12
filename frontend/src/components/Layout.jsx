@@ -28,8 +28,10 @@ export default function Layout({ children }) {
       { to: "/", label: "Dashboard", icon: "dashboard" },
       { to: "/new", label: "New Jobs", icon: "spark" },
       { to: "/all", label: "All Jobs", icon: "list" },
+      { to: "/inbox", label: "Inbox", icon: "inbox" },
       { to: "/companies", label: "Companies", icon: "building" },
       { to: "/audit", label: "Audit", icon: "shield" },
+      { to: "/metrics", label: "Metrics", icon: "dashboard" },
       { to: "/settings", label: "Settings", icon: "settings" },
     ],
     []
@@ -40,8 +42,10 @@ export default function Layout({ children }) {
     if (hit) return hit.label;
     if (location.pathname.startsWith("/new")) return "New Jobs";
     if (location.pathname.startsWith("/all")) return "All Jobs";
+    if (location.pathname.startsWith("/inbox")) return "Inbox";
     if (location.pathname.startsWith("/companies")) return "Companies";
     if (location.pathname.startsWith("/audit")) return "Audit";
+    if (location.pathname.startsWith("/metrics")) return "Metrics";
     if (location.pathname.startsWith("/settings")) return "Settings";
     return "Job Watcher";
   }, [location.pathname, navItems]);
@@ -604,6 +608,10 @@ const globalStyles = `
 }
 
 .jw-btn{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   border: 1px solid var(--border);
   background: rgba(24, 33, 45, 0.72);
   color: var(--text);
@@ -612,7 +620,14 @@ const globalStyles = `
   cursor: pointer;
   font-weight: var(--fw-semibold);
   font-size: var(--fs-sm);
+  line-height: 1.15;
   transition: background 140ms ease, border-color 140ms ease, transform 140ms ease, opacity 140ms ease, box-shadow 140ms ease;
+}
+
+.jw-btn svg{
+  width: 1.1em;
+  height: 1.1em;
+  flex: 0 0 auto;
 }
 
 .jw-btn:hover{
@@ -635,6 +650,11 @@ const globalStyles = `
   padding: 8px 10px;
   border-radius: 10px;
   font-size: var(--fs-sm);
+}
+
+.jw-btn.small svg{
+  width: 1.05em;
+  height: 1.05em;
 }
 
 .jw-btn.primary{
@@ -692,6 +712,12 @@ const globalStyles = `
   transition: background 140ms ease, border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
 }
 
+.jw-iconbtn svg{
+  width: 1.1em;
+  height: 1.1em;
+  flex: 0 0 auto;
+}
+
 .jw-iconbtn:hover{
   background: var(--hover);
   border-color: var(--border-strong);
@@ -709,6 +735,13 @@ const globalStyles = `
   background: rgba(24, 33, 45, 0.72);
   color: var(--text);
   font-weight: var(--fw-medium);
+  line-height: 1.15;
+}
+
+.jw-badge svg{
+  width: 1.05em;
+  height: 1.05em;
+  flex: 0 0 auto;
 }
 
 .jw-badge.subtle{ color: var(--text-2); }
@@ -739,6 +772,13 @@ const globalStyles = `
   color: var(--text-2);
   font-size: var(--fs-xs);
   font-weight: var(--fw-medium);
+  line-height: 1.15;
+}
+
+.jw-pill svg{
+  width: 1.05em;
+  height: 1.05em;
+  flex: 0 0 auto;
 }
 
 .jw-pill.ok{
@@ -1430,4 +1470,3 @@ const globalStyles = `
   }
 }
 `;
-

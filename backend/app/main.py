@@ -11,23 +11,28 @@ from app.api.runs import router as runs_router
 from app.api.audit import router as audit_router
 from app.api.overrides import router as overrides_router
 from app.api.feedback import router as feedback_router
+from app.api.inbox import router as inbox_router
 
 from app.core.scheduler import SchedulerService
 from app.api.status import router as status_router
 
 from app.api.companies import router as companies_router
 from app.api.settings import router as settings_router
+from app.api.metrics import router as metrics_router
+from app.core.config import get_runtime_config, get_db_path
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Job Watcher", version="0.2.0")
 
-    db_path = os.environ.get("DB_PATH", "./job_watcher.sqlite3")
+    db_path = get_db_path()
     migration = os.path.join(os.path.dirname(__file__), "..", "migrations", "001_init.sql")
     migration = os.path.abspath(migration)
 
     init_db(db_path, migration)
     app.state.db = connect(db_path)
+    app.state.db_path = db_path
+    app.state.runtime_config = get_runtime_config()
 
     # Scheduler attach
     scheduler = SchedulerService(app)
@@ -49,9 +54,11 @@ def create_app() -> FastAPI:
     app.include_router(audit_router, prefix="/api")
     app.include_router(overrides_router, prefix="/api")
     app.include_router(feedback_router, prefix="/api")
+    app.include_router(inbox_router, prefix="/api")
     app.include_router(status_router, prefix="/api")
     app.include_router(companies_router, prefix="/api")
     app.include_router(settings_router, prefix="/api")
+    app.include_router(metrics_router, prefix="/api")
 
     return app
 

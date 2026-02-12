@@ -6,6 +6,8 @@ import AllJobs from "./pages/AllJobs.jsx";
 import Companies from "./pages/Companies.jsx";
 import Settings from "./pages/Settings.jsx";
 import Audit from "./pages/Audit.jsx";
+import Inbox from "./pages/Inbox.jsx";
+import Metrics from "./pages/Metrics.jsx";
 
 export default function App() {
   return (
@@ -17,7 +19,9 @@ export default function App() {
           <Route path="/all" element={<AllJobs />} />
           <Route path="/companies" element={<Companies />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/inbox" element={<Inbox />} />
           <Route path="/audit" element={<Audit />} />
+          <Route path="/metrics" element={<Metrics />} />
         </Routes>
       </Layout>
     </BrowserRouter>
