@@ -157,6 +157,7 @@ def jobs(
 
     offset = (page - 1) * page_size
 
+    order_sql = "COALESCE(ms.ml_prob, -1) DESC, js.first_seen DESC" if sort == "relevance" else "js.first_seen DESC"
     rows = con.execute(
         """SELECT
             jl.dedupe_key,
@@ -177,13 +178,13 @@ def jobs(
         FROM jobs_latest jl
         JOIN jobs_seen js ON js.dedupe_key = jl.dedupe_key
         LEFT JOIN job_ml_scores ms ON ms.dedupe_key = jl.dedupe_key
-        """ + where_sql + """
-        ORDER BY
-          CASE WHEN :sort = 'relevance' THEN COALESCE(ms.ml_prob, -1) ELSE 0 END DESC,
-          js.first_seen DESC
+        """
+        + where_sql
+        + f"""
+        ORDER BY {order_sql}
         LIMIT :limit OFFSET :offset
         """,
-        {**params, "limit": page_size, "offset": offset, "sort": sort},
+        {**params, "limit": page_size, "offset": offset},
     ).fetchall()
 
     items = [dict(r) for r in rows]

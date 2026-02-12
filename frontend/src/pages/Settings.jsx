@@ -682,6 +682,7 @@ export default function Settings() {
           color: #e6fff3;
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
           font-size: var(--fs-xs);
+          line-height: 1.15;
           max-width: 100%;
         }
         .jw-chip > span:first-child{
@@ -746,4 +747,3 @@ export default function Settings() {
     </div>
   );
 }
-

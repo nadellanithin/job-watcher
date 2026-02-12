@@ -1,15 +1,36 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Query, Request
+
+from app.db.repo_settings import get_settings
 
 
 router = APIRouter()
 
 
+
 def _latest_run_id(con) -> Optional[str]:
+    """
+    Default Audit view should behave like "debug history":
+    prefer the latest run in the *current settings_hash group* (so when filters change,
+    Audit doesn't show a mixed pile), and fall back to latest overall.
+    """
+    try:
+        settings = get_settings(con, "default") or {}
+        settings_hash = hashlib.sha256(json.dumps(settings, sort_keys=True).encode("utf-8")).hexdigest()
+        row = con.execute(
+            "SELECT run_id FROM run_settings WHERE settings_hash=? ORDER BY created_at DESC LIMIT 1",
+            (settings_hash,),
+        ).fetchone()
+        if row and row["run_id"]:
+            return row["run_id"]
+    except Exception:
+        pass
+
     row = con.execute("SELECT run_id FROM runs ORDER BY started_at DESC LIMIT 1").fetchone()
     return row["run_id"] if row else None
 
@@ -59,34 +80,26 @@ def get_audit(
 
     rows = con.execute(
         """
+        WITH latest_feedback AS (
+          SELECT f.dedupe_key, f.label, f.reason_category, f.created_at
+          FROM job_feedback f
+          JOIN (
+            SELECT dedupe_key, MAX(id) AS max_id
+            FROM job_feedback
+            GROUP BY dedupe_key
+          ) lf ON lf.max_id = f.id
+        )
         SELECT
           a.run_id, a.dedupe_key, a.included, a.settings_hash, a.created_at,
           a.company_name, a.title, a.location, a.url, a.source_type, a.work_mode, a.reasons_json,
           o.action AS override_action,
           o.note AS override_note,
-          (
-            SELECT f.label
-            FROM job_feedback f
-            WHERE f.dedupe_key = a.dedupe_key
-            ORDER BY f.created_at DESC, f.id DESC
-            LIMIT 1
-          ) AS feedback_label,
-          (
-            SELECT f.reason_category
-            FROM job_feedback f
-            WHERE f.dedupe_key = a.dedupe_key
-            ORDER BY f.created_at DESC, f.id DESC
-            LIMIT 1
-          ) AS feedback_reason_category,
-          (
-            SELECT f.created_at
-            FROM job_feedback f
-            WHERE f.dedupe_key = a.dedupe_key
-            ORDER BY f.created_at DESC, f.id DESC
-            LIMIT 1
-          ) AS feedback_created_at
+          fb.label AS feedback_label,
+          fb.reason_category AS feedback_reason_category,
+          fb.created_at AS feedback_created_at
         FROM run_job_audit a
         LEFT JOIN job_overrides o ON o.dedupe_key = a.dedupe_key
+        LEFT JOIN latest_feedback fb ON fb.dedupe_key = a.dedupe_key
         """
         + where_sql
         + """

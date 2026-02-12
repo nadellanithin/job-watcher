@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from app.core.config import get_runtime_config
+
 
 router = APIRouter()
 
@@ -110,10 +112,15 @@ def delete_override(request: Request, dedupe_key: str) -> Dict[str, Any]:
 
     # If this override was creating auto-feedback rows, clear those as well.
     # We keep manual feedback (reason_category="manual") as it reflects user intent.
-    try:
-        con.execute("DELETE FROM job_feedback WHERE dedupe_key=? AND reason_category=?", (dedupe_key, "override"))
-        con.commit()
-    except Exception:
-        pass
+    cfg = get_runtime_config()
+    if not cfg.keep_all_feedback:
+        try:
+            con.execute(
+                "DELETE FROM job_feedback WHERE dedupe_key=? AND reason_category=?",
+                (dedupe_key, "override"),
+            )
+            con.commit()
+        except Exception:
+            pass
 
     return {"ok": True, "dedupe_key": dedupe_key}

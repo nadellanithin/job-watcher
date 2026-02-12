@@ -412,7 +412,7 @@ export default function Companies() {
 
           <div className="jw-modal-b" style={{ display: "grid", gap: 12 }}>
             <div>
-              <div className="jw-label">
+              <div className="jw-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
                 <span>Company name</span>
                 <span className="jw-help">Required</span>
               </div>
@@ -422,7 +422,7 @@ export default function Companies() {
             <div className="jw-card" style={{ background: "transparent" }}>
               <div className="jw-card-b" style={{ display: "grid", gap: 10 }}>
                 <div>
-                  <div className="jw-label">
+                  <div className="jw-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
                     <span>Career URL</span>
                     <span className="jw-help">best coverage</span>
                   </div>
@@ -474,14 +474,14 @@ export default function Companies() {
                   </div>
                   <div className="jw-row">
                     <div className="jw-col" style={{ minWidth: 200 }}>
-                      <div className="jw-label">
+                      <div className="jw-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
                         <span>Greenhouse slug</span>
                         <span className="jw-help">optional</span>
                       </div>
                       <input className="jw-input" value={addGhSlug} onChange={(e) => setAddGhSlug(e.target.value)} placeholder="e.g. airbnb" />
                     </div>
                     <div className="jw-col" style={{ minWidth: 200 }}>
-                      <div className="jw-label">
+                      <div className="jw-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
                         <span>Lever slug</span>
                         <span className="jw-help">optional</span>
                       </div>
