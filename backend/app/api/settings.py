@@ -25,7 +25,7 @@ class SettingsModel(BaseModel):
     preferred_states: Optional[List[str]] = None
     work_mode: Optional[Literal["any", "remote", "hybrid", "onsite"]] = None
 
-    uscis_h1b_years: Optional[List[int]] = None
+    uscis_h1b_years: Optional[List[int]] = [2020, 2021, 2022, 2023]
     uscis_h1b_cache_dir: Optional[str] = None
 
     # Local ML relevance

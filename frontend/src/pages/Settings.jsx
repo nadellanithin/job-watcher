@@ -228,6 +228,7 @@ export default function Settings() {
 
   const [saved, setSaved] = useState(null);
   const [draft, setDraft] = useState(null);
+  const [h1bYearsInput, setH1bYearsInput] = useState("2020,2021,2022,2023");
   const [active, setActive] = useState("targets");
 
   const isDirty = useMemo(() => JSON.stringify(saved) !== JSON.stringify(draft), [saved, draft]);
@@ -246,6 +247,7 @@ export default function Settings() {
         const next = settingsData || {};
         setSaved(next);
         setDraft(next);
+        setH1bYearsInput(Array.isArray(next?.uscis_h1b_years) && next.uscis_h1b_years.length ? next.uscis_h1b_years.join(",") : "2020,2021,2022,2023");
         setFeedbackStats(statsData || { counts: {} });
       })
       .catch((e) => {
@@ -265,18 +267,33 @@ export default function Settings() {
 
   const patch = (k, v) => setDraft((d) => ({ ...(d || {}), [k]: v }));
 
+  useEffect(() => {
+    if (!draft) return;
+    const years = Array.isArray(draft.uscis_h1b_years) ? draft.uscis_h1b_years : [];
+    const normalized = years.join(",");
+    if ((normalized || "") !== (h1bYearsInput || "") && document.activeElement?.name !== "uscis_h1b_years") {
+      setH1bYearsInput(normalized || "2020,2021,2022,2023");
+    }
+  }, [draft, h1bYearsInput]);
+
   const save = async () => {
     setErr("");
     try {
       const res = await apiPut("/api/settings", draft || {});
-      setSaved(res || draft || {});
-      setDraft(res || draft || {});
+      const next = res || draft || {};
+      setSaved(next);
+      setDraft(next);
+      setH1bYearsInput(Array.isArray(next?.uscis_h1b_years) && next.uscis_h1b_years.length ? next.uscis_h1b_years.join(",") : "2020,2021,2022,2023");
     } catch (e) {
       setErr(e?.message || "Failed to save");
     }
   };
 
-  const reset = () => setDraft(saved || {});
+  const reset = () => {
+    const next = saved || {};
+    setDraft(next);
+    setH1bYearsInput(Array.isArray(next?.uscis_h1b_years) && next.uscis_h1b_years.length ? next.uscis_h1b_years.join(",") : "2020,2021,2022,2023");
+  };
 
   if (loading) return <div className="jw-muted">Loading...</div>;
   if (!draft) return <div className="jw-empty">No settings loaded.</div>;
@@ -497,19 +514,22 @@ export default function Settings() {
               <FieldRow label="USCIS H-1B years" help="Historical signal only">
                 <input
                   className="jw-input"
-                  value={(draft.uscis_h1b_years || []).join(",")}
-                  onChange={(e) =>
+                  name="uscis_h1b_years"
+                  value={h1bYearsInput}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    setH1bYearsInput(raw);
                     patch(
                       "uscis_h1b_years",
-                      e.target.value
+                      raw
                         .split(/[,\s]+/)
                         .map((x) => x.trim())
                         .filter(Boolean)
                         .map((x) => Number(x))
                         .filter((x) => Number.isFinite(x))
-                    )
-                  }
-                  placeholder="e.g. 2024, 2023, 2022"
+                    );
+                  }}
+                  placeholder="e.g. 2020, 2021, 2022, 2023"
                 />
               </FieldRow>
             </Section>
